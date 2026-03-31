@@ -99,7 +99,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
             {(user?.role === ROLES.REGIONAL_ENGINEER || user?.role === ROLES.DEVELOPER) && (
               <NavItem path="/users" icon={Users} label="User Management" />
             )}
-            {(user?.role === ROLES.REGIONAL_ENGINEER || user?.role === ROLES.DEVELOPER) && (
+            {user?.role === ROLES.REGIONAL_ENGINEER && (
               <NavItem path="/system-log" icon={History} label="System Log" />
             )}
           </nav>

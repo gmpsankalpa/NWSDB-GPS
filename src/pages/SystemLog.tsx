@@ -51,13 +51,13 @@ const SystemLog = () => {
   const [dateFilter, setDateFilter] = useState('all'); // today, week, month, all
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
   const { user } = useAuth();
+  const canViewSystemLogs = user?.role === ROLES.REGIONAL_ENGINEER;
 
   useEffect(() => {
     if (!user) return;
 
-    // Only Regional Engineers and Developers can view system logs
-    if (user.role !== ROLES.REGIONAL_ENGINEER && user.role !== ROLES.DEVELOPER) {
-      toast.error('Access denied: You do not have permission to view system logs');
+    // Only Regional Engineers can view system logs
+    if (!canViewSystemLogs) {
       return;
     }
 
@@ -78,14 +78,18 @@ const SystemLog = () => {
         setLoading(false);
       },
       (error) => {
-        console.error('Error fetching logs:', error);
-        toast.error('Failed to load system logs');
+        if (error.code === 'permission-denied') {
+          toast.error('Access denied for system logs');
+        } else {
+          console.error('Error fetching logs:', error);
+          toast.error('Failed to load system logs');
+        }
         setLoading(false);
       }
     );
 
     return () => unsubscribe();
-  }, [user]);
+  }, [user, canViewSystemLogs]);
 
   // Filter logs based on search and filters
   const filteredLogs = useMemo(() => {
@@ -176,6 +180,23 @@ const SystemLog = () => {
           <div className="text-center">
             <Activity className="animate-spin mx-auto mb-4 text-blue-600" size={32} />
             <p className="text-gray-600">Loading system logs...</p>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
+
+  if (!canViewSystemLogs) {
+    return (
+      <Layout>
+        <Toaster position="top-right" />
+        <div className="max-w-4xl mx-auto">
+          <div className="bg-white rounded-xl border p-8 text-center">
+            <Shield className="mx-auto mb-3 text-orange-500" size={28} />
+            <h1 className="text-xl font-bold text-gray-900 mb-2">Access Restricted</h1>
+            <p className="text-sm text-gray-600">
+              Only Regional Engineer users can view the System Activity Log.
+            </p>
           </div>
         </div>
       </Layout>
@@ -439,7 +460,7 @@ const SystemLog = () => {
               <p className="text-xs sm:text-sm font-medium text-blue-900">System Log Information</p>
               <p className="text-[10px] sm:text-xs text-blue-700 mt-1">
                 This log shows the last 500 system activities. Logs are stored permanently and can be used for auditing and troubleshooting.
-                Only Regional Engineers and Developers have access to view system logs.
+                Only Regional Engineers have access to view system logs.
               </p>
             </div>
           </div>

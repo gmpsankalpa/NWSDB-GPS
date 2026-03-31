@@ -88,6 +88,18 @@ service cloud.firestore {
       // Prevent updates (history is immutable)
       allow update: if false;
     }
+
+    // System logs collection rules
+    match /systemLogs/{logId} {
+      // Only Regional Engineer can read/delete logs
+      allow read, delete: if isAuthenticated() && isAdminRole();
+
+      // Authenticated non-blocked users can write logs
+      allow create: if isAuthenticated() && !isBlocked();
+
+      // Logs are immutable
+      allow update: if false;
+    }
     
     // Default: deny all other access
     match /{document=**} {
