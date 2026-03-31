@@ -39,7 +39,7 @@ export const FirestoreConnectionMonitor = () => {
               errorMessage.includes('failed-precondition') ||
               errorMessage.includes('400')) {
             
-            if (process.env.NODE_ENV === 'development') {
+            if (import.meta.env.DEV) {
               toast(() => (
                 <div className="flex items-start gap-3">
                   <Database className="w-5 h-5 text-orange-500 flex-shrink-0 mt-0.5" />
@@ -82,7 +82,7 @@ export const FirestoreConnectionMonitor = () => {
   }, [showWarning]);
 
   // Don't render anything in production or if no errors
-  if (process.env.NODE_ENV !== 'development' || !showWarning) {
+  if (!import.meta.env.DEV || !showWarning) {
     return null;
   }
 

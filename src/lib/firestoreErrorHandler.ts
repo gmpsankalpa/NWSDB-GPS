@@ -30,7 +30,7 @@ export const handleFirestoreError = (
       );
       
       // Only show user notification in production
-      if (process.env.NODE_ENV === 'production') {
+      if (import.meta.env.PROD) {
         toast.error(
           'Some real-time features are temporarily limited. Please refresh the page.',
           {
@@ -105,7 +105,7 @@ export const handleFirestoreError = (
   }
 
   // Unknown/Generic error - only show in development
-  if (process.env.NODE_ENV === 'development') {
+  if (import.meta.env.DEV) {
     toast.error(`Error: ${error.message}`, {
       duration: 4000,
       icon: '❌',

@@ -17,7 +17,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 // Session timeout duration (30 minutes of inactivity)
 const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes in milliseconds
-let inactivityTimer: NodeJS.Timeout | null = null;
+let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);

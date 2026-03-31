@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
-import { Download, Building2, Calendar, MapPin, Tags, Clock, Filter, BarChart3 } from 'lucide-react';
+import { Download, Building2, MapPin, Tags, Clock, Filter, BarChart3 } from 'lucide-react';
 import toast, { Toaster } from 'react-hot-toast';
 import Layout from '../components/Layout';
 import { db } from '../firebase';

@@ -8,7 +8,7 @@ import Layout from '../components/Layout';
 import NavigationButton from '../components/NavigationButton';
 import { CategoryBadge, CategoryIcon } from '../components/CategorySelector';
 import { useAuth } from '../contexts/AuthContext';
-import { hasOfficeAccess } from '../lib/offices';
+import { hasOfficeAccess, type Office } from '../lib/offices';
 import { getActiveCategories } from '../lib/categoryService';
 import type { Connection, Category } from '../lib/types';
 import { hasValidGPS, formatCoordinates } from '../lib/gpsUtils';
@@ -104,7 +104,8 @@ const MapViewPage = () => {
 
     return connections.filter(conn => {
       // Office access control
-      if (!hasOfficeAccess(user.office, user.role, conn.office)) return false;
+      if (!conn.office) return false;
+      if (!hasOfficeAccess(user.office, user.role, conn.office as Office)) return false;
 
       // Must have valid GPS
       if (!hasValidGPS(conn.gps)) return false;
@@ -165,7 +166,7 @@ const MapViewPage = () => {
         setGettingLocation(false);
         toast.success('Centered on your location');
       },
-      (error) => {
+      () => {
         setGettingLocation(false);
         toast.error('Unable to get your location');
       }

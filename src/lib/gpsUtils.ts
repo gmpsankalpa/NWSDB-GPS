@@ -300,7 +300,9 @@ export const getCardinalDirection = (lat: number, lng: number): string => {
 /**
  * Check if connection has valid GPS data
  */
-export const hasValidGPS = (gps?: GPSCoordinates | null): boolean => {
+export const hasValidGPS = (
+  gps?: Pick<GPSCoordinates, 'latitude' | 'longitude'> | GPSCoordinates | null
+): boolean => {
   if (!gps) return false;
   return isValidCoordinates(gps.latitude, gps.longitude);
 };

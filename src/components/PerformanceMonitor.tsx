@@ -22,7 +22,7 @@ export const PerformanceMonitor = () => {
         const domInteractive = navigationTiming.domInteractive - navigationTiming.fetchStart;
         
         // Only log in development
-        if (process.env.NODE_ENV === 'development') {
+        if (import.meta.env.DEV) {
           console.log(`📊 Navigation Performance (${location.pathname}):`, {
             pageLoadTime: `${pageLoadTime.toFixed(2)}ms`,
             domInteractive: `${domInteractive.toFixed(2)}ms`,
