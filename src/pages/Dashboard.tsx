@@ -1,0 +1,1206 @@
+import { useEffect, useState, useMemo, useRef } from 'react';
+import { collection, onSnapshot, query, orderBy, addDoc, Timestamp, getDocs, where } from 'firebase/firestore';
+import { db } from '../firebase';
+import { useNavigate } from 'react-router-dom';
+import { logDataExport } from '../lib/systemLogger';
+import { Plus, Search, Users, Activity, Filter, X, AlertCircle, Building2, Loader2, FileDown, ChevronDown, FileSpreadsheet, User, Mail, Shield, ChevronUp, MapPin, Navigation, Eye } from 'lucide-react';
+import { useForm } from 'react-hook-form';
+import toast, { Toaster } from 'react-hot-toast';
+import Layout from '../components/Layout';
+import { cn, formatDate, formatAccountNumber } from '../lib/utils';
+import { useAuth } from '../contexts/AuthContext';
+import { ROLES, OFFICE_LIST, hasOfficeAccess, type Office } from '../lib/offices';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import * as XLSX from 'xlsx';
+import GPSCapture from '../components/GPSCapture';
+import CategorySelector, { CategoryBadge } from '../components/CategorySelector';
+import { hasValidGPS, navigateToLocation } from '../lib/gpsUtils';
+import { getActiveCategories } from '../lib/categoryService';
+import type { Category } from '../lib/types';
+
+// Stats Card Component
+const StatCard = ({ label, value, icon: Icon, color }: any) => (
+  <div className="bg-white p-3 sm:p-4 lg:p-6 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3 sm:gap-4 transition-transform active:scale-[0.98]">
+    <div className={`p-2 sm:p-2.5 lg:p-3 rounded-lg ${color} text-white flex-shrink-0`}>
+      <Icon size={20} className="sm:w-5 sm:h-5 lg:w-6 lg:h-6" />
+    </div>
+    <div className="flex-1 min-w-0">
+      <p className="text-xs sm:text-sm text-gray-500 truncate">{label}</p>
+      <h3 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-800">{value}</h3>
+    </div>
+  </div>
+);
+
+const Dashboard = () => {
+  const [apps, setApps] = useState<any[]>([]);
+  const [showModal, setShowModal] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [officeFilter, setOfficeFilter] = useState<Office | 'All'>('All');
+  const [categoryFilters, setCategoryFilters] = useState<string[]>([]);
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showCategoryFilterMenu, setShowCategoryFilterMenu] = useState(false);
+  const [showMobileFilters, setShowMobileFilters] = useState(false);
+  const [showProfileDetails, setShowProfileDetails] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  const categoryFilterRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
+  const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm();
+  const { user, loading } = useAuth();
+  
+  // New state for GPS and categories
+  const [gpsData, setGpsData] = useState<{ latitude: number; longitude: number; accuracy?: number } | undefined>();
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [captureDateTime, setCaptureDateTime] = useState('');
+  const [autoAddressLoading, setAutoAddressLoading] = useState(false);
+
+  const normalizeCategoryToken = (value: unknown) => String(value || '').trim().toLowerCase();
+  const categoryNameById = useMemo(
+    () => new Map(categories.map((c) => [c.id, normalizeCategoryToken(c.name)])),
+    [categories]
+  );
+
+  // Close export menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setShowExportMenu(false);
+      }
+      if (categoryFilterRef.current && !categoryFilterRef.current.contains(event.target as Node)) {
+        setShowCategoryFilterMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+  
+  // Load categories
+  useEffect(() => {
+    getActiveCategories().then(setCategories).catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    const fetchAddress = async () => {
+      if (!gpsData) {
+        setCaptureDateTime('');
+        return;
+      }
+
+      setCaptureDateTime(new Date().toLocaleString());
+      setAutoAddressLoading(true);
+      try {
+        const resp = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${gpsData.latitude}&lon=${gpsData.longitude}`
+        );
+        const json = await resp.json();
+        if (json?.display_name) {
+          setValue('address', json.display_name, { shouldValidate: true });
+        }
+      } catch (e) {
+        console.error('Reverse geocoding failed:', e);
+      } finally {
+        setAutoAddressLoading(false);
+      }
+    };
+
+    fetchAddress();
+  }, [gpsData, setValue]);
+
+  // Real-time listener (No manual refresh needed) - MUST be before conditional returns
+  useEffect(() => {
+    if (!user) return; // Early return in effect is okay
+    
+    const q = query(collection(db, "applications"), orderBy("lastUpdated", "desc"));
+    const unsubscribe = onSnapshot(q, 
+      (snapshot) => {
+        const appsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setApps(appsData);
+      },
+      (error) => {
+        console.error("Error fetching applications:", error);
+        toast.error("Error loading applications. Please refresh the page.");
+      }
+    );
+    return () => unsubscribe();
+  }, [user]);
+
+  // Filtered and searched applications - MUST be before conditional returns
+  const filteredApps = useMemo(() => {
+    if (!user) return [];
+    
+    return apps.filter(app => {
+      // Office-based access control
+      const hasAccess = hasOfficeAccess(user.office, user.role, app.office);
+      if (!hasAccess) return false;
+
+      // Office filter (for Regional Engineer)
+      if (officeFilter !== 'All' && app.office !== officeFilter) return false;
+
+      // Category filter
+      if (categoryFilters.length > 0) {
+        const appCategoryValues = new Set<string>();
+
+        (app.categories || []).forEach((categoryValue: any) => {
+          if (typeof categoryValue === 'string') {
+            appCategoryValues.add(normalizeCategoryToken(categoryValue));
+            return;
+          }
+
+          if (categoryValue && typeof categoryValue === 'object') {
+            if ('id' in categoryValue && categoryValue.id) {
+              appCategoryValues.add(normalizeCategoryToken(categoryValue.id));
+            }
+            if ('name' in categoryValue && categoryValue.name) {
+              appCategoryValues.add(normalizeCategoryToken(categoryValue.name));
+            }
+          }
+        });
+
+        (app.categoryObjects || []).forEach((category: Category) => {
+          appCategoryValues.add(normalizeCategoryToken(category.id));
+          appCategoryValues.add(normalizeCategoryToken(category.name));
+        });
+
+        const hasSelectedCategory = categoryFilters.some((categoryId) => {
+          const categoryName = categoryNameById.get(categoryId);
+          return (
+            appCategoryValues.has(normalizeCategoryToken(categoryId)) ||
+            (!!categoryName && appCategoryValues.has(categoryName))
+          );
+        });
+        if (!hasSelectedCategory) return false;
+      }
+
+      const matchesSearch = 
+        app.accountNumber?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        app.note?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        app.address?.toLowerCase().includes(searchQuery.toLowerCase());
+      
+      // Date filter
+      let matchesDate = true;
+      if (fromDate || toDate) {
+        const capturedDate = app.captureDateTime?.toDate?.() || app.lastUpdated?.toDate?.();
+        if (capturedDate) {
+          const appDate = new Date(capturedDate.setHours(0, 0, 0, 0));
+          
+          if (fromDate) {
+            const from = new Date(new Date(fromDate).setHours(0, 0, 0, 0));
+            if (appDate < from) matchesDate = false;
+          }
+          
+          if (toDate) {
+            const to = new Date(new Date(toDate).setHours(23, 59, 59, 999));
+            if (appDate > to) matchesDate = false;
+          }
+        } else {
+          matchesDate = false; // Exclude applications without date if filter is active
+        }
+      }
+      
+      return matchesSearch && matchesDate;
+    });
+  }, [apps, searchQuery, officeFilter, categoryFilters, fromDate, toDate, user, categoryNameById]);
+
+  const stats = useMemo(() => ({
+    total: filteredApps.length,
+    gpsCaptured: filteredApps.filter((a) => hasValidGPS(a.gps)).length,
+    categorized: filteredApps.filter((a) => (a.categories || []).length > 0).length,
+    noGps: filteredApps.filter((a) => !hasValidGPS(a.gps)).length,
+  }), [filteredApps]);
+
+  // Show loading state while checking auth
+  if (loading) {
+    return (
+      <Layout>
+        <div className="flex items-center justify-center h-96">
+          <div className="text-center">
+            <Loader2 className="animate-spin mx-auto mb-4 text-blue-600" size={48} />
+            <p className="text-gray-600 font-medium">Loading...</p>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
+
+  if (!user) return null;
+
+  // Export filtered applications to PDF
+  const exportToPDF = async () => {
+    setExporting(true);
+    try {
+      const doc = new jsPDF();
+      
+      // Add title
+      doc.setFontSize(18);
+      doc.setFont('helvetica', 'bold');
+      doc.text('NWSDB Water Connection Applications', 14, 20);
+      
+      // Add office and date info
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Office: ${user.office}`, 14, 30);
+      doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 36);
+      doc.text(`Officer: ${user.name}`, 14, 42);
+      
+      // Add filters info if any
+      let yPos = 48;
+      if (searchQuery) {
+        doc.text(`Search: ${searchQuery}`, 14, yPos);
+        yPos += 6;
+      }
+      if (fromDate || toDate) {
+        const dateRange = `Date Range: ${fromDate || 'Start'} to ${toDate || 'End'}`;
+        doc.text(dateRange, 14, yPos);
+        yPos += 6;
+      }
+      if (categoryFilters.length > 0) {
+        const selectedCategoryNames = categories
+          .filter(c => categoryFilters.includes(c.id))
+          .map(c => c.name)
+          .join(', ');
+        doc.text(`Categories: ${selectedCategoryNames}`, 14, yPos);
+        yPos += 6;
+      }
+      
+      // Add summary statistics
+      yPos += 4;
+      doc.setFontSize(10);
+      doc.text(`Total Captures: ${filteredApps.length}`, 14, yPos);
+      doc.text(`With GPS: ${filteredApps.filter(a => hasValidGPS(a.gps)).length}`, 80, yPos);
+      doc.text(`Categorized: ${filteredApps.filter(a => (a.categories || []).length > 0).length}`, 130, yPos);
+      
+      // Prepare table data
+      const tableData = filteredApps.map(app => [
+        app.accountNumber || 'N/A',
+        app.note || 'N/A',
+        app.address || 'N/A',
+        app.gps ? `${app.gps.latitude?.toFixed?.(6) || app.gps.latitude}, ${app.gps.longitude?.toFixed?.(6) || app.gps.longitude}` : 'N/A',
+        app.captureDateTime?.toDate?.()?.toLocaleDateString() || app.lastUpdated?.toDate?.()?.toLocaleDateString() || 'N/A'
+      ]);
+      
+      // Add table
+      autoTable(doc, {
+        startY: yPos + 8,
+        head: [[
+          'Account No',
+          'Note',
+          'Address',
+          'GPS',
+          'Captured Date'
+        ]],
+        body: tableData,
+        theme: 'grid',
+        headStyles: {
+          fillColor: [3, 105, 161], // NWSDB Blue
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+          fontSize: 9
+        },
+        styles: {
+          fontSize: 8,
+          cellPadding: 3
+        },
+        columnStyles: {
+          0: { cellWidth: 28 },
+          1: { cellWidth: 30 },
+          2: { cellWidth: 42 },
+          3: { cellWidth: 28 },
+          4: { cellWidth: 25 }
+        },
+        margin: { top: 10, left: 14, right: 14 },
+        didDrawPage: (_data) => {
+          // Add page numbers
+          const pageCount = doc.getNumberOfPages();
+          doc.setFontSize(8);
+          doc.setFont('helvetica', 'normal');
+          for (let i = 1; i <= pageCount; i++) {
+            doc.setPage(i);
+            doc.text(
+              `Page ${i} of ${pageCount}`,
+              doc.internal.pageSize.width / 2,
+              doc.internal.pageSize.height - 10,
+              { align: 'center' }
+            );
+          }
+        }
+      });
+      
+      // Save the PDF
+      const fileName = `${user.office.replace(/ /g, '_')}_Applications_${new Date().toISOString().split('T')[0]}.pdf`;
+      doc.save(fileName);
+      
+      // Log export action
+      await logDataExport(user, 'pdf', filteredApps.length);
+      
+      toast.success(`PDF exported successfully! (${filteredApps.length} applications)`);
+    } catch (error) {
+      console.error('Error exporting PDF:', error);
+      toast.error('Failed to export PDF. Please try again.');
+    } finally {
+      setExporting(false);
+      setShowExportMenu(false);
+    }
+  };
+
+  // Export filtered applications to Excel
+  const exportToExcel = async () => {
+    setExporting(true);
+    try {
+      // Prepare worksheet data
+      const worksheetData = [
+        // Header with metadata
+        ['NWSDB Water Connection Applications'],
+        ['Office:', user.office],
+        ['Generated:', new Date().toLocaleString()],
+        ['Officer:', user.name],
+        [],
+        // Applied Filters
+        ...(searchQuery ? [['Search Query:', searchQuery]] : []),
+        ...(officeFilter !== 'All' && user.role === ROLES.REGIONAL_ENGINEER ? [['Office Filter:', officeFilter]] : []),
+        ...(categoryFilters.length > 0 ? [['Category Filter:', categories.filter(c => categoryFilters.includes(c.id)).map(c => c.name).join(', ')]] : []),
+        ...(fromDate || toDate ? [['Date Range:', `${fromDate || 'Start'} to ${toDate || 'End'}`]] : []),
+        [],
+        // Statistics
+        ['Summary Statistics'],
+        ['Total Captures:', filteredApps.length],
+        ['With GPS:', filteredApps.filter(a => hasValidGPS(a.gps)).length],
+        ['With Categories:', filteredApps.filter(a => (a.categories || []).length > 0).length],
+        [],
+        // Table Headers
+        ['Account Number', 'Note', 'Address', 'GPS Coordinates', 'Captured Date', 'Last Updated'],
+        // Table Data
+        ...filteredApps.map(app => [
+          app.accountNumber || 'N/A',
+          app.note || 'N/A',
+          app.address || 'N/A',
+          app.gps ? `${app.gps.latitude?.toFixed?.(6) || app.gps.latitude}, ${app.gps.longitude?.toFixed?.(6) || app.gps.longitude}` : 'N/A',
+          app.captureDateTime?.toDate?.()?.toLocaleDateString() || app.lastUpdated?.toDate?.()?.toLocaleDateString() || 'N/A',
+          app.lastUpdated?.toDate?.()?.toLocaleDateString() || 'N/A'
+        ])
+      ];
+
+      // Create workbook and worksheet
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(worksheetData);
+
+      // Set column widths
+      ws['!cols'] = [
+        { wch: 20 },  // Account Number
+        { wch: 28 },  // Note
+        { wch: 40 },  // Address
+        { wch: 28 },  // GPS
+        { wch: 16 },  // Captured Date
+        { wch: 16 }   // Last Updated
+      ];
+
+      // Add worksheet to workbook
+      XLSX.utils.book_append_sheet(wb, ws, 'Applications');
+
+      // Generate file name
+      const fileName = `${user.office.replace(/ /g, '_')}_Applications_${new Date().toISOString().split('T')[0]}.xlsx`;
+
+      // Save file
+      XLSX.writeFile(wb, fileName);
+
+      // Log export action
+      await logDataExport(user, 'excel', filteredApps.length);
+
+      toast.success(`Excel exported successfully! (${filteredApps.length} applications)`);
+    } catch (error) {
+      console.error('Error exporting Excel:', error);
+      toast.error('Failed to export Excel. Please try again.');
+    } finally {
+      setExporting(false);
+      setShowExportMenu(false);
+    }
+  };
+
+  const onCreate = async (data: any) => {
+    const normalizedAccountNumber = formatAccountNumber(data.accountNumber || '');
+
+    if (!normalizedAccountNumber || !gpsData) {
+      toast.error("Account number and captured GPS location are required");
+      return;
+    }
+
+    setCreating(true);
+    try {
+      const accountNumberQuery = query(
+        collection(db, "applications"),
+        where("accountNumber", "==", normalizedAccountNumber)
+      );
+      const existingDocs = await getDocs(accountNumberQuery);
+      
+      if (!existingDocs.empty) {
+        toast.error("This account number already exists! Please use a unique account number.");
+        setCreating(false);
+        return;
+      }
+
+      const gpsField = {
+        latitude: gpsData.latitude,
+        longitude: gpsData.longitude,
+        capturedAt: Timestamp.now(),
+        capturedBy: user.email,
+        ...(typeof gpsData.accuracy === 'number' ? { accuracy: gpsData.accuracy } : {})
+      };
+
+      await addDoc(collection(db, "applications"), {
+        accountNumber: normalizedAccountNumber,
+        note: data.note || '',
+        address: data.address || '',
+        office: user.office, // Assign to current user's office
+        createdBy: user.email,
+        submissionDate: Timestamp.now(),
+        lastUpdated: Timestamp.now(),
+        captureDateTime: Timestamp.now(),
+        gps: gpsField,
+        categories: selectedCategories.length > 0 ? selectedCategories : [],
+      });
+
+      toast.success("Location captured and connection saved successfully!");
+      setShowModal(false);
+      reset();
+      setGpsData(undefined);
+      setSelectedCategories([]);
+      setCaptureDateTime('');
+    } catch (e: any) {
+      console.error("Error creating application:", e);
+      toast.error(e?.message || "Error saving captured location. Please try again.");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <Layout>
+      <Toaster position="top-right" />
+      
+      {/* Header with User Info */}
+      <div className="mb-4 sm:mb-6 bg-gradient-to-r from-blue-600 to-blue-700 text-white p-4 sm:p-6 rounded-xl shadow-lg">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-4 mb-3 sm:mb-4">
+          <div className="flex-1 min-w-0 w-full sm:w-auto">
+            <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold mb-2">Dashboard</h1>
+            <div className="flex items-center gap-2 text-blue-100 text-sm sm:text-base">
+              <Building2 size={16} className="sm:w-[18px] sm:h-[18px] flex-shrink-0" />
+              <span className="font-medium truncate">{user.office}</span>
+              <span className="text-blue-300 flex-shrink-0">•</span>
+              <span className="text-xs sm:text-sm truncate">{user.role}</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto">
+            {user.role === ROLES.REGIONAL_ENGINEER && (
+              <div className="bg-white/20 px-3 sm:px-4 py-2 rounded-lg backdrop-blur-sm flex-1 sm:flex-initial">
+                <p className="text-[10px] sm:text-xs text-blue-100">Access Level</p>
+                <p className="text-xs sm:text-sm font-semibold">All Offices</p>
+              </div>
+            )}
+            <button
+              onClick={() => setShowProfileDetails(!showProfileDetails)}
+              className="flex items-center justify-center gap-2 px-3 sm:px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg backdrop-blur-sm transition-transform active:scale-[0.98] border border-white/30 flex-1 sm:flex-initial"
+            >
+              <User size={16} className="sm:w-[18px] sm:h-[18px]" />
+              <span className="text-xs sm:text-sm font-medium">Profile</span>
+              {showProfileDetails ? <ChevronUp size={14} className="sm:w-4 sm:h-4" /> : <ChevronDown size={14} className="sm:w-4 sm:h-4" />}
+            </button>
+          </div>
+        </div>
+
+        {/* Collapsible Profile Details */}
+        {showProfileDetails && (
+          <div className="mt-3 sm:mt-4 p-3 sm:p-4 bg-white/10 backdrop-blur-sm rounded-lg border border-white/20 animate-in slide-in-from-top duration-200">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+              <div className="flex items-start gap-2 sm:gap-3">
+                <div className="p-1.5 sm:p-2 bg-white/20 rounded-lg flex-shrink-0">
+                  <User size={18} className="sm:w-5 sm:h-5 text-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] sm:text-xs text-blue-100 mb-0.5 sm:mb-1">Full Name</p>
+                  <p className="text-xs sm:text-sm font-semibold truncate">{user.name}</p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-2 sm:gap-3">
+                <div className="p-1.5 sm:p-2 bg-white/20 rounded-lg flex-shrink-0">
+                  <Mail size={18} className="sm:w-5 sm:h-5 text-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] sm:text-xs text-blue-100 mb-0.5 sm:mb-1">Email Address</p>
+                  <p className="text-xs sm:text-sm font-semibold break-all">{user.email}</p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-2 sm:gap-3">
+                <div className="p-1.5 sm:p-2 bg-white/20 rounded-lg flex-shrink-0">
+                  <Building2 size={18} className="sm:w-5 sm:h-5 text-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] sm:text-xs text-blue-100 mb-0.5 sm:mb-1">Office Location</p>
+                  <p className="text-xs sm:text-sm font-semibold truncate">{user.office}</p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-2 sm:gap-3">
+                <div className="p-1.5 sm:p-2 bg-white/20 rounded-lg flex-shrink-0">
+                  <Shield size={18} className="sm:w-5 sm:h-5 text-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] sm:text-xs text-blue-100 mb-0.5 sm:mb-1">Role & Permissions</p>
+                  <p className="text-xs sm:text-sm font-semibold truncate">{user.role}</p>
+                </div>
+              </div>
+
+              {user.role === ROLES.REGIONAL_ENGINEER && (
+                <div className="flex items-start gap-2 sm:gap-3">
+                  <div className="p-1.5 sm:p-2 bg-white/20 rounded-lg flex-shrink-0">
+                    <Activity size={18} className="sm:w-5 sm:h-5 text-white" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[10px] sm:text-xs text-blue-100 mb-0.5 sm:mb-1">Access Scope</p>
+                    <p className="text-xs sm:text-sm font-semibold">All Offices & Applications</p>
+                  </div>
+                </div>
+              )}
+
+              {user.role === ROLES.ACTING_OFFICER && (
+                <div className="flex items-start gap-2 sm:gap-3">
+                  <div className="p-1.5 sm:p-2 bg-white/20 rounded-lg flex-shrink-0">
+                    <Activity size={18} className="sm:w-5 sm:h-5 text-white" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[10px] sm:text-xs text-blue-100 mb-0.5 sm:mb-1">Access Scope</p>
+                    <p className="text-xs sm:text-sm font-semibold">Office Applications Only</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+      
+      {/* Stats Row */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6 mb-4 sm:mb-6 lg:mb-8">
+        <StatCard label="Total Applications" value={stats.total} icon={Users} color="bg-blue-600" />
+        <StatCard label="GPS Captured" value={stats.gpsCaptured} icon={MapPin} color="bg-green-600" />
+        <StatCard label="Categorized" value={stats.categorized} icon={Activity} color="bg-purple-600" />
+        <StatCard label="No GPS" value={stats.noGps} icon={AlertCircle} color="bg-orange-500" />
+      </div>
+
+      <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 sm:gap-4 mb-4 sm:mb-6">
+        <div className={cn("flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto flex-wrap", !showMobileFilters && "hidden sm:flex")}>
+          {/* Search Input */}
+          <div className="relative w-full sm:w-80">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+            <input 
+              type="text" 
+              placeholder="Search Account No, Note, Address..." 
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className={cn(
+                "pl-10 pr-10 w-full py-2 sm:py-2.5 bg-white border border-gray-300 rounded-lg text-sm",
+                "focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+              )}
+            />
+            {searchQuery && (
+              <button 
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                <X size={16} />
+              </button>
+            )}
+          </div>
+
+          {/* Office Filter - Only for Regional Engineer */}
+          {user.role === ROLES.REGIONAL_ENGINEER && (
+            <div className="relative w-full sm:w-auto">
+              <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+              <select
+                value={officeFilter}
+                onChange={(e) => setOfficeFilter(e.target.value as Office | 'All')}
+                className={cn(
+                  "pl-10 pr-8 py-2 sm:py-2.5 w-full bg-white border border-gray-300 rounded-lg text-sm",
+                  "focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all appearance-none cursor-pointer"
+                )}
+              >
+                <option value="All">All Offices</option>
+                {OFFICE_LIST.map(office => (
+                  <option key={office.value} value={office.value}>{office.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Category Multi-Select Filter */}
+          <div className="relative w-full sm:w-auto" ref={categoryFilterRef}>
+            <button
+              type="button"
+              onClick={() => setShowCategoryFilterMenu(prev => !prev)}
+              className={cn(
+                "w-full sm:w-56 pl-10 pr-8 py-2 sm:py-2.5 bg-white border border-gray-300 rounded-lg text-sm text-left",
+                "focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all",
+                categoryFilters.length > 0 && "border-blue-400 bg-blue-50/40"
+              )}
+            >
+              <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+              {categoryFilters.length === 0 ? 'All Categories' : `${categoryFilters.length} Categories Selected`}
+            </button>
+
+            {showCategoryFilterMenu && (
+              <div className="absolute z-50 mt-1 w-full sm:w-72 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg p-2">
+                {categories.length === 0 ? (
+                  <p className="text-xs text-gray-500 px-2 py-1">No categories available</p>
+                ) : (
+                  categories.map((category) => (
+                    <label key={category.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={categoryFilters.includes(category.id)}
+                        onChange={() =>
+                          setCategoryFilters((prev) =>
+                            prev.includes(category.id)
+                              ? prev.filter((id) => id !== category.id)
+                              : [...prev, category.id]
+                          )
+                        }
+                        className="rounded text-blue-600"
+                      />
+                      <span className="text-sm text-gray-700">{category.name}</span>
+                    </label>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+
+          {categoryFilters.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 sm:max-w-md">
+              {categoryFilters.map((categoryId) => {
+                const category = categories.find((c) => c.id === categoryId);
+                return (
+                  <button
+                    key={categoryId}
+                    type="button"
+                    onClick={() => setCategoryFilters((prev) => prev.filter((id) => id !== categoryId))}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-blue-50 text-blue-700 text-xs hover:bg-blue-100"
+                    title="Remove category filter"
+                  >
+                    <span>{category?.name || categoryId}</span>
+                    <X size={12} />
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Date Range Filter */}
+          <div className="flex gap-2 w-full sm:w-auto">
+            <div className="relative flex-1 sm:w-40">
+              <input 
+                type="date" 
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                placeholder="From Date"
+                className={cn(
+                  "pl-3 pr-3 w-full py-2 sm:py-2.5 bg-white border border-gray-300 rounded-lg text-sm",
+                  "focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                )}
+                title="From Date"
+              />
+            </div>
+            <div className="relative flex-1 sm:w-40">
+              <input 
+                type="date" 
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                placeholder="To Date"
+                className={cn(
+                  "pl-3 pr-3 w-full py-2 sm:py-2.5 bg-white border border-gray-300 rounded-lg text-sm",
+                  "focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                )}
+                title="To Date"
+              />
+            </div>
+            {(fromDate || toDate) && (
+              <button 
+                onClick={() => {
+                  setFromDate('');
+                  setToDate('');
+                }}
+                className="px-3 py-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                title="Clear date filter"
+              >
+                <X size={18} />
+              </button>
+            )}
+            {categoryFilters.length > 0 && (
+              <button
+                onClick={() => setCategoryFilters([])}
+                className="px-3 py-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                title="Clear category filter"
+              >
+                <X size={18} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setShowMobileFilters((prev) => !prev)}
+            className="sm:hidden px-3 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 flex items-center gap-2"
+          >
+            <Filter size={16} />
+            {showMobileFilters ? 'Hide Filters' : 'Show Filters'}
+          </button>
+          {/* Export Dropdown */}
+          <div className="relative" ref={exportMenuRef}>
+            <button 
+              onClick={() => setShowExportMenu(!showExportMenu)}
+              disabled={exporting || filteredApps.length === 0}
+              className={cn(
+                "bg-gradient-to-r from-green-600 to-green-700 text-white",
+                "px-4 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center justify-center gap-2 text-sm sm:text-base",
+                "hover:shadow-lg hover:scale-105 transition-all duration-200",
+                "whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+              )}
+              title={filteredApps.length === 0 ? 'No applications to export' : 'Export applications'}
+            >
+              {exporting ? (
+                <>
+                  <Loader2 size={16} className="sm:w-[18px] sm:h-[18px] animate-spin" />
+                  <span className="hidden sm:inline">Exporting...</span>
+                  <span className="sm:hidden">...</span>
+                </>
+              ) : (
+                <>
+                  <FileDown size={16} className="sm:w-[18px] sm:h-[18px]" />
+                  <span className="hidden sm:inline">Export</span>
+                  <ChevronDown size={16} className="sm:w-[16px] sm:h-[16px] ml-1" />
+                </>
+              )}
+            </button>
+
+            {/* Dropdown Menu */}
+            {showExportMenu && !exporting && (
+              <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-50 py-1 animate-in fade-in slide-in-from-top-2 duration-200">
+                <button
+                  onClick={exportToPDF}
+                  className="w-full px-4 py-2.5 text-left text-sm hover:bg-gray-50 flex items-center gap-3 transition-colors"
+                >
+                  <FileDown size={16} className="text-red-600" />
+                  <div>
+                    <p className="font-medium text-gray-900">Export as PDF</p>
+                    <p className="text-xs text-gray-500">Download PDF document</p>
+                  </div>
+                </button>
+                <button
+                  onClick={exportToExcel}
+                  className="w-full px-4 py-2.5 text-left text-sm hover:bg-gray-50 flex items-center gap-3 transition-colors"
+                >
+                  <FileSpreadsheet size={16} className="text-green-600" />
+                  <div>
+                    <p className="font-medium text-gray-900">Export as Excel</p>
+                    <p className="text-xs text-gray-500">Download XLSX spreadsheet</p>
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
+
+            <button 
+              onClick={() => setShowModal(true)} 
+            className={cn(
+              "bg-gradient-to-r from-nwsdbBlue to-blue-700 text-white",
+              "px-4 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center justify-center gap-2 text-sm sm:text-base",
+              "hover:shadow-lg hover:scale-105 transition-all duration-200",
+              "whitespace-nowrap"
+            )}
+          >
+            <Plus size={16} className="sm:w-[18px] sm:h-[18px]" />
+              <span className="hidden sm:inline">Add Capture Location</span>
+              <span className="sm:hidden">Capture</span>
+            </button>
+        </div>
+      </div>
+
+      {/* Modern Table - Desktop View */}
+      <div className="hidden md:block bg-white rounded-xl shadow-sm border overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs sm:text-sm text-left">
+            <thead className="bg-gradient-to-r from-gray-50 to-gray-100 text-gray-700 font-semibold uppercase text-xs border-b-2 border-gray-200">
+              <tr>
+                <th className="px-6 py-4">Account Number</th>
+                {user.role === ROLES.REGIONAL_ENGINEER && <th className="px-6 py-4">Office</th>}
+                <th className="px-6 py-4">Note</th>
+                <th className="px-6 py-4">Captured At</th>
+                <th className="px-6 py-4">Categories</th>
+                <th className="px-6 py-4">GPS</th>
+                <th className="px-6 py-4">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {filteredApps.length === 0 ? (
+                <tr>
+                    <td colSpan={user.role === ROLES.REGIONAL_ENGINEER ? 7 : 6} className="px-6 py-12 text-center text-gray-500">
+                    <div className="flex flex-col items-center gap-2">
+                      <Search className="text-gray-300" size={48} />
+                      <p className="text-lg font-medium">No captures found</p>
+                      <p className="text-sm">Try adjusting your search or filters</p>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                filteredApps.map((app) => {
+                  const appCategoryIds = Array.isArray(app.categories) ? app.categories : [];
+                  const connCategories = categories.filter((cat) => appCategoryIds.includes(cat.id));
+                  return (
+                  <tr key={app.id} className="hover:bg-blue-50/30 transition-colors duration-150 cursor-pointer" onClick={() => navigate(`/application/${app.id}`)}>
+                    <td className="px-6 py-4">
+                      <span className="font-mono font-semibold text-blue-700 bg-blue-50 px-2 py-1 rounded">
+                        {app.accountNumber || 'N/A'}
+                      </span>
+                    </td>
+                    {user.role === ROLES.REGIONAL_ENGINEER && (
+                      <td className="px-6 py-4">
+                        <span className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded font-medium">
+                          {OFFICE_LIST.find(o => o.value === app.office)?.code || 'N/A'}
+                        </span>
+                      </td>
+                    )}
+                    <td className="px-6 py-4 text-gray-700">{app.note || '-'}</td>
+                    <td className="px-6 py-4 text-gray-600 text-xs">{formatDate(app.captureDateTime || app.lastUpdated)}</td>
+                    <td className="px-6 py-4">
+                      {connCategories.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {connCategories.slice(0, 2).map(cat => (
+                            <CategoryBadge key={cat.id} category={cat} size="sm" />
+                          ))}
+                          {connCategories.length > 2 && (
+                            <span className="text-xs text-gray-500">+{connCategories.length - 2}</span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-gray-400">-</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      {hasValidGPS(app.gps) ? (
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigateToLocation({
+                                latitude: app.gps.latitude,
+                                longitude: app.gps.longitude,
+                                label: app.accountNumber || 'Connection'
+                              });
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-green-50 text-green-700 hover:bg-green-100 text-xs font-medium"
+                            title="Navigate to location"
+                          >
+                            <Navigation size={14} />
+                            <span>Navigate</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-gray-100 text-gray-400 text-xs font-medium">
+                            <MapPin size={14} />
+                            <span>Map</span>
+                          </span>
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-gray-100 text-gray-400 text-xs font-medium">
+                            <Navigation size={14} />
+                            <span>Navigate</span>
+                          </span>
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/application/${app.id}`);
+                        }}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold whitespace-nowrap"
+                      >
+                        <Eye size={14} />
+                        View →
+                      </button>
+                    </td>
+                  </tr>
+                );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+        
+        {/* Results Counter */}
+        {filteredApps.length > 0 && (
+          <div className="px-6 py-3 bg-gray-50 border-t text-sm text-gray-600">
+            Showing <span className="font-semibold text-gray-900">{filteredApps.length}</span> of <span className="font-semibold text-gray-900">{apps.length}</span> applications
+          </div>
+        )}
+      </div>
+
+      {/* Mobile Card View */}
+      <div className="md:hidden space-y-3">
+        {filteredApps.length === 0 ? (
+          <div className="bg-white rounded-xl p-8 text-center">
+            <Search className="text-gray-300 mx-auto mb-3" size={48} />
+            <p className="text-gray-600 font-medium">No captures found</p>
+            <p className="text-sm text-gray-500 mt-1">Try adjusting your search or filters</p>
+          </div>
+        ) : (
+          <>
+             {filteredApps.map((app) => {
+               const appCategoryIds = Array.isArray(app.categories) ? app.categories : [];
+               const cardCategories = categories.filter((cat) => appCategoryIds.includes(cat.id));
+               return (
+               <div
+                 key={app.id}
+                onClick={() => navigate(`/application/${app.id}`)}
+                className="bg-white rounded-xl shadow-sm border p-4 active:scale-[0.98] transition-transform"
+              >
+                {/* Header */}
+                <div className="flex justify-between items-start mb-3">
+                  <div className="flex-1">
+                    <span className="font-mono text-sm font-bold text-blue-700 bg-blue-50 px-2 py-1 rounded">
+                      {app.accountNumber || 'N/A'}
+                    </span>
+                    {user.role === ROLES.REGIONAL_ENGINEER && (
+                      <span className="ml-2 text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded font-medium">
+                        {OFFICE_LIST.find(o => o.value === app.office)?.code || 'N/A'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Details */}
+                <div className="space-y-2">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">{app.note || 'No note'}</p>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <span className="text-gray-500">Account:</span>
+                      <span className="ml-1 font-mono text-gray-700">{app.accountNumber || 'N/A'}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">GPS:</span>
+                      <span className="ml-1 text-gray-700">{hasValidGPS(app.gps) ? 'Captured' : 'Not captured'}</span>
+                    </div>
+                  </div>
+
+                  {cardCategories.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {cardCategories.slice(0, 2).map((cat) => (
+                        <CategoryBadge key={cat.id} category={cat} size="sm" />
+                      ))}
+                      {cardCategories.length > 2 && (
+                        <span className="text-xs text-gray-500">+{cardCategories.length - 2}</span>
+                      )}
+                    </div>
+                  )}
+
+                    <div className="text-xs text-gray-500 pt-2 border-t space-y-2">
+                      <span className="block">Captured: {formatDate(app.captureDateTime || app.lastUpdated)}</span>
+                    <div className="flex items-center justify-between gap-2">
+                      {hasValidGPS(app.gps) ? (
+                        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            onClick={() => navigate('/map', { state: { focusConnection: app.id } })}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-green-50 text-green-700 hover:bg-green-100 text-xs font-medium"
+                            title="View on map"
+                          >
+                            <MapPin size={14} />
+                            <span>Map</span>
+                          </button>
+                          <button
+                            onClick={() =>
+                              navigateToLocation({
+                                latitude: app.gps.latitude,
+                                longitude: app.gps.longitude,
+                                label: app.accountNumber || 'Connection'
+                              })
+                            }
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-green-50 text-green-700 hover:bg-green-100 text-xs font-medium"
+                            title="Navigate to location"
+                          >
+                            <Navigation size={14} />
+                            <span>Navigate</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-gray-100 text-gray-400 text-xs font-medium">
+                            <MapPin size={14} />
+                            <span>Map</span>
+                          </span>
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-gray-100 text-gray-400 text-xs font-medium">
+                            <Navigation size={14} />
+                            <span>Navigate</span>
+                          </span>
+                        </div>
+                      )}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/application/${app.id}`);
+                        }}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold"
+                      >
+                        <Eye size={14} />
+                        View →
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+            })}
+            
+            {/* Mobile Results Counter */}
+            <div className="bg-white rounded-xl p-3 text-center text-sm text-gray-600 border">
+              Showing <span className="font-semibold text-gray-900">{filteredApps.length}</span> of <span className="font-semibold text-gray-900">{apps.length}</span> applications
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Modal Overlay */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-xl p-6 sm:p-8 w-full max-w-lg shadow-2xl animate-in fade-in zoom-in duration-200 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-lg sm:text-xl font-bold mb-4 sm:mb-6 text-gray-800">Capture Connection Location</h2>
+            <form onSubmit={handleSubmit(onCreate)} className="space-y-3 sm:space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Account Number <span className="text-red-500">*</span>
+                </label>
+                <input 
+                  {...register("accountNumber", { 
+                    required: "Account number is required",
+                    onChange: (e) => {
+                      e.target.value = formatAccountNumber(e.target.value || '');
+                    }
+                  })} 
+                  className={cn(
+                    "w-full border p-2.5 sm:p-2 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base sm:text-sm",
+                    errors.accountNumber && "border-red-500"
+                  )}
+                  placeholder="e.g. 42/08/310/014/17" 
+                />
+                {errors.accountNumber && (
+                  <p className="text-red-500 text-xs mt-1">{errors.accountNumber.message as string}</p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Note
+                </label>
+                <textarea
+                  {...register("note")}
+                  className="w-full border p-2.5 sm:p-2 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none resize-none text-base sm:text-sm"
+                  placeholder="Add location note"
+                  rows={2}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Select Categories
+                </label>
+                <CategorySelector
+                  selectedCategories={selectedCategories}
+                  onChange={setSelectedCategories}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Capture GPS Location <span className="text-red-500">*</span>
+                </label>
+                <GPSCapture
+                  value={gpsData}
+                  onChange={setGpsData}
+                  required
+                  showMap={false}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Capture Date & Time (Auto)
+                </label>
+                <input
+                  value={captureDateTime}
+                  readOnly
+                  className="w-full border p-2.5 sm:p-2 rounded-lg bg-gray-50 text-base sm:text-sm"
+                  placeholder="Auto filled when GPS captured"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Address (Auto from GPS)
+                </label>
+                <textarea 
+                  {...register("address")} 
+                  className={cn(
+                    "w-full border p-2.5 sm:p-2 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none resize-none text-base sm:text-sm",
+                    autoAddressLoading && "bg-gray-50"
+                  )}
+                  placeholder={autoAddressLoading ? "Fetching address from map..." : "Address will auto-fill from captured GPS"}
+                  rows={3}
+                />
+              </div>
+              <div className="flex gap-3 mt-6">
+                <button 
+                  type="button" 
+                  onClick={() => { setShowModal(false); reset(); }} 
+                  disabled={creating}
+                  className="flex-1 bg-gray-100 text-gray-700 py-2.5 sm:py-2 rounded-lg hover:bg-gray-200 disabled:opacity-50 font-medium text-base sm:text-sm"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  disabled={creating}
+                  className={cn(
+                    "flex-1 bg-nwsdbBlue text-white py-2.5 sm:py-2 rounded-lg hover:bg-blue-700 font-medium text-base sm:text-sm",
+                    "flex items-center justify-center gap-2",
+                    "disabled:opacity-50 disabled:cursor-not-allowed"
+                  )}
+                >
+                  {creating ? (
+                    <>
+                      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 04 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Creating...
+                    </>
+                  ) : (
+                    'Save Captured Location'
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </Layout>
+  );
+};
+
+export default Dashboard;
