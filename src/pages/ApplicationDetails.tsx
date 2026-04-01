@@ -180,102 +180,113 @@ const ApplicationDetails = () => {
     <Layout>
       <Toaster position="top-right" />
 
-      <div className="max-w-5xl mx-auto space-y-4 sm:space-y-6">
-        <div className="bg-white rounded-xl shadow-sm border p-4 sm:p-6">
-          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-            <button
-              onClick={() => navigate('/dashboard')}
-              className="inline-flex items-center gap-2 text-gray-600 hover:text-gray-900"
-            >
-              <ArrowLeft size={18} /> Back
-            </button>
+      <div className="max-w-5xl mx-auto space-y-3 sm:space-y-4 md:space-y-6">
+        <div className="bg-white rounded-xl shadow-sm border p-3 sm:p-4 md:p-6">
+          {/* Header - Mobile Optimized */}
+          <div className="flex flex-col gap-3 mb-4 sm:mb-6">
+            <div className="flex items-center justify-between">
+              <button
+                onClick={() => navigate('/dashboard')}
+                className="inline-flex items-center gap-1.5 sm:gap-2 text-gray-600 hover:text-gray-900 active:scale-95 transition text-sm sm:text-base"
+              >
+                <ArrowLeft size={18} className="sm:w-5 sm:h-5" />
+                <span>Back</span>
+              </button>
+              <h1 className="text-base sm:text-lg md:text-xl font-bold text-gray-900 truncate ml-2">Details</h1>
+            </div>
+            
+            {/* Action Buttons - Full Width on Mobile */}
             <div className="flex gap-2">
               <button
                 onClick={handleDelete}
                 disabled={deleting}
-                className="px-3 py-2 rounded-lg bg-red-50 text-red-700 hover:bg-red-100 inline-flex items-center gap-2"
+                className="flex-1 sm:flex-none px-3 sm:px-4 py-2.5 sm:py-2 rounded-lg bg-red-50 text-red-700 hover:bg-red-100 active:bg-red-200 inline-flex items-center justify-center gap-1.5 sm:gap-2 text-sm sm:text-base font-medium transition active:scale-95 disabled:opacity-50"
               >
-                <Trash2 size={16} /> Delete
+                <Trash2 size={16} className="sm:w-[18px] sm:h-[18px]" />
+                <span>Delete</span>
               </button>
               <button
                 onClick={handleSave}
                 disabled={saving}
-                className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 inline-flex items-center gap-2"
+                className="flex-1 sm:flex-none px-3 sm:px-4 py-2.5 sm:py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 inline-flex items-center justify-center gap-1.5 sm:gap-2 text-sm sm:text-base font-medium transition active:scale-95 disabled:opacity-50"
               >
-                {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                Save
+                {saving ? <Loader2 size={16} className="sm:w-[18px] sm:h-[18px] animate-spin" /> : <Save size={16} className="sm:w-[18px] sm:h-[18px]" />}
+                <span>Save</span>
               </button>
             </div>
           </div>
 
-          <h1 className="text-xl sm:text-2xl font-bold text-gray-900 mb-4">Captured Location Details</h1>
-
-          <div className="grid grid-cols-1 gap-4">
+          {/* Form Fields - Mobile Optimized */}
+          <div className="space-y-3 sm:space-y-4">
             <div>
-              <label className="text-sm font-medium text-gray-700 mb-1 block">Account Number</label>
-                <input
-                  value={accountNumber}
-                  onChange={(e) => setAccountNumber(formatAccountNumber(e.target.value))}
-                  className="w-full border rounded-lg px-3 py-2"
-                  placeholder="42/08/310/042/17"
-                />
+              <label className="text-xs sm:text-sm font-medium text-gray-700 mb-1.5 block">Account Number</label>
+              <input
+                value={accountNumber}
+                onChange={(e) => setAccountNumber(formatAccountNumber(e.target.value))}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2.5 sm:py-2 text-sm sm:text-base focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="42/08/310/042/17"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs sm:text-sm font-medium text-gray-700 mb-1.5 block">Note</label>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                rows={3}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2.5 sm:py-2 resize-none text-sm sm:text-base focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="Add note about this connection"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs sm:text-sm font-medium text-gray-700 mb-1.5 block">Categories</label>
+              <CategorySelector selectedCategories={selectedCategories} onChange={setSelectedCategories} />
+              {categoryObjects.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-2">
+                  {categoryObjects.map((cat) => (
+                    <CategoryBadge key={cat.id} category={cat} size="sm" />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label className="text-xs sm:text-sm font-medium text-gray-700 mb-1.5 block">Capture GPS Location</label>
+              <GPSCapture value={gpsData} onChange={setGpsData} required showMap={false} />
+            </div>
+
+            <div>
+              <label className="text-xs sm:text-sm font-medium text-gray-700 mb-1.5 block">Address (Auto from GPS)</label>
+              <textarea
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                rows={3}
+                className={cn(
+                  'w-full border border-gray-300 rounded-lg px-3 py-2.5 sm:py-2 resize-none text-sm sm:text-base focus:ring-2 focus:ring-blue-500 focus:border-transparent',
+                  autoAddressLoading && 'bg-gray-50 animate-pulse'
+                )}
+                placeholder={autoAddressLoading ? 'Fetching address from map...' : 'Address'}
+              />
             </div>
           </div>
 
-          <div className="mt-4">
-            <label className="text-sm font-medium text-gray-700 mb-1 block">Note</label>
-            <textarea
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              rows={2}
-              className="w-full border rounded-lg px-3 py-2 resize-none"
-              placeholder="Add note about this connection"
-            />
-          </div>
-
-          <div className="mt-4">
-            <label className="text-sm font-medium text-gray-700 mb-1 block">Categories</label>
-            <CategorySelector selectedCategories={selectedCategories} onChange={setSelectedCategories} />
-            {categoryObjects.length > 0 && (
-              <div className="flex flex-wrap gap-2 mt-2">
-                {categoryObjects.map((cat) => (
-                  <CategoryBadge key={cat.id} category={cat} size="sm" />
-                ))}
+          {/* Info Cards - Mobile Optimized */}
+          <div className="mt-4 sm:mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="border border-gray-200 rounded-lg p-3 sm:p-4 bg-gray-50">
+              <div className="text-xs sm:text-sm text-gray-600 inline-flex items-center gap-1.5 sm:gap-2 mb-1.5 sm:mb-2">
+                <Calendar size={14} className="sm:w-4 sm:h-4 flex-shrink-0" />
+                <span>Capture Date & Time</span>
               </div>
-            )}
-          </div>
-
-          <div className="mt-4">
-            <label className="text-sm font-medium text-gray-700 mb-1 block">Capture GPS Location</label>
-            <GPSCapture value={gpsData} onChange={setGpsData} required showMap={false} />
-          </div>
-
-          <div className="mt-4">
-            <label className="text-sm font-medium text-gray-700 mb-1 block">Address (Auto from GPS)</label>
-            <textarea
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              rows={3}
-              className={cn('w-full border rounded-lg px-3 py-2 resize-none', autoAddressLoading && 'bg-gray-50')}
-              placeholder={autoAddressLoading ? 'Fetching address from map...' : 'Address'}
-            />
-          </div>
-
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="border rounded-lg p-3 bg-gray-50">
-              <div className="text-sm text-gray-600 inline-flex items-center gap-2">
-                <Calendar size={16} />
-                Capture Date & Time
-              </div>
-              <div className="font-medium text-gray-900 mt-1">{captureDateTime || '-'}</div>
+              <div className="font-medium text-sm sm:text-base text-gray-900 break-words">{captureDateTime || '-'}</div>
             </div>
 
-            <div className="border rounded-lg p-3 bg-gray-50">
-              <div className="text-sm text-gray-600 inline-flex items-center gap-2">
-                <MapPin size={16} />
-                GPS Coordinates
+            <div className="border border-gray-200 rounded-lg p-3 sm:p-4 bg-gray-50">
+              <div className="text-xs sm:text-sm text-gray-600 inline-flex items-center gap-1.5 sm:gap-2 mb-1.5 sm:mb-2">
+                <MapPin size={14} className="sm:w-4 sm:h-4 flex-shrink-0" />
+                <span>GPS Coordinates</span>
               </div>
-              <div className="font-medium text-gray-900 mt-1">
+              <div className="font-medium text-xs sm:text-sm md:text-base text-gray-900 font-mono break-all">
                 {hasValidGPS(gpsData as any)
                   ? `${gpsData?.latitude?.toFixed(6)}, ${gpsData?.longitude?.toFixed(6)}`
                   : 'Not captured'}
@@ -283,8 +294,9 @@ const ApplicationDetails = () => {
             </div>
           </div>
 
+          {/* Navigation Button - Full Width on Mobile */}
           {hasValidGPS(gpsData as any) && (
-            <div className="mt-4">
+            <div className="mt-4 sm:mt-6">
               <NavigationButton
                 latitude={gpsData!.latitude}
                 longitude={gpsData!.longitude}
@@ -295,20 +307,21 @@ const ApplicationDetails = () => {
           )}
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm border p-4 sm:p-6">
-          <h2 className="text-lg font-bold text-gray-900 mb-2 inline-flex items-center gap-2">
-            <FileText size={18} />
-            Record Info
+        {/* Record Info Card - Mobile Optimized */}
+        <div className="bg-white rounded-xl shadow-sm border p-3 sm:p-4 md:p-6">
+          <h2 className="text-base sm:text-lg font-bold text-gray-900 mb-2 sm:mb-3 inline-flex items-center gap-1.5 sm:gap-2">
+            <FileText size={16} className="sm:w-[18px] sm:h-[18px] flex-shrink-0" />
+            <span>Record Info</span>
           </h2>
-          <div className="text-sm text-gray-600 space-y-1">
-            <p>
-              <strong>Office:</strong> {data.office || 'N/A'}
+          <div className="text-xs sm:text-sm text-gray-600 space-y-1.5 sm:space-y-2">
+            <p className="break-words">
+              <strong className="text-gray-900">Office:</strong> {data.office || 'N/A'}
             </p>
-            <p>
-              <strong>Created by:</strong> {data.createdBy || 'N/A'}
+            <p className="break-words">
+              <strong className="text-gray-900">Created by:</strong> {data.createdBy || 'N/A'}
             </p>
-            <p>
-              <strong>Last updated:</strong> {formatDate(data.lastUpdated)}
+            <p className="break-words">
+              <strong className="text-gray-900">Last updated:</strong> {formatDate(data.lastUpdated)}
             </p>
           </div>
         </div>

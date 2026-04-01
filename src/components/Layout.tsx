@@ -93,7 +93,9 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
             ) : (
               <NavItem path="/dashboard" icon={LayoutDashboard} label="Dashboard" />
             )}
+            {(user?.role === ROLES.REGIONAL_ENGINEER || user?.role === ROLES.DEVELOPER) && (
             <NavItem path="/categories" icon={Tags} label="Categories" />
+            )}
             <NavItem path="/maps" icon={Map} label="GPS" />
             <NavItem path="/reports" icon={FileText} label="Reports" />
             {(user?.role === ROLES.REGIONAL_ENGINEER || user?.role === ROLES.DEVELOPER) && (

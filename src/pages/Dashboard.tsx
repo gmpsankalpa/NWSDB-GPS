@@ -591,8 +591,8 @@ const Dashboard = () => {
         <StatCard label="No GPS" value={stats.noGps} icon={AlertCircle} color="bg-orange-500" />
       </div>
 
-      <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 sm:gap-4 mb-4 sm:mb-6">
-        <div className={cn("flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto flex-wrap", !showMobileFilters && "hidden sm:flex")}>
+      <div className="flex flex-col sm:flex-row sm:justify-between items-stretch sm:items-start gap-3 sm:gap-4 mb-4 sm:mb-6">
+        <div className={cn("flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:flex-1 sm:min-w-0 flex-wrap", !showMobileFilters && "hidden sm:flex")}>
           {/* Search Input */}
           <div className="relative w-full sm:w-80">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
@@ -699,7 +699,7 @@ const Dashboard = () => {
           )}
 
           {/* Date Range Filter */}
-          <div className="flex gap-2 w-full sm:w-auto">
+          <div className="flex gap-2 w-full sm:w-auto sm:items-center">
             <div className="relative flex-1 sm:w-40">
               <input 
                 type="date" 
@@ -750,83 +750,103 @@ const Dashboard = () => {
           </div>
         </div>
 
-        <div className="flex gap-2">
+        {/* Mobile-First Action Buttons - Optimized Layout */}
+        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto sm:self-start sm:shrink-0">
+          {/* Show Filters Button - Mobile Only, Full Width */}
           <button
             type="button"
             onClick={() => setShowMobileFilters((prev) => !prev)}
-            className="sm:hidden px-3 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 flex items-center gap-2"
-          >
-            <Filter size={16} />
-            {showMobileFilters ? 'Hide Filters' : 'Show Filters'}
-          </button>
-          {/* Export Dropdown */}
-          <div className="relative" ref={exportMenuRef}>
-            <button 
-              onClick={() => setShowExportMenu(!showExportMenu)}
-              disabled={exporting || filteredApps.length === 0}
-              className={cn(
-                "bg-gradient-to-r from-green-600 to-green-700 text-white",
-                "px-4 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center justify-center gap-2 text-sm sm:text-base",
-                "hover:shadow-lg hover:scale-105 transition-all duration-200",
-                "whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
-              )}
-              title={filteredApps.length === 0 ? 'No applications to export' : 'Export applications'}
-            >
-              {exporting ? (
-                <>
-                  <Loader2 size={16} className="sm:w-[18px] sm:h-[18px] animate-spin" />
-                  <span className="hidden sm:inline">Exporting...</span>
-                  <span className="sm:hidden">...</span>
-                </>
-              ) : (
-                <>
-                  <FileDown size={16} className="sm:w-[18px] sm:h-[18px]" />
-                  <span className="hidden sm:inline">Export</span>
-                  <ChevronDown size={16} className="sm:w-[16px] sm:h-[16px] ml-1" />
-                </>
-              )}
-            </button>
-
-            {/* Dropdown Menu */}
-            {showExportMenu && !exporting && (
-              <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-50 py-1 animate-in fade-in slide-in-from-top-2 duration-200">
-                <button
-                  onClick={exportToPDF}
-                  className="w-full px-4 py-2.5 text-left text-sm hover:bg-gray-50 flex items-center gap-3 transition-colors"
-                >
-                  <FileDown size={16} className="text-red-600" />
-                  <div>
-                    <p className="font-medium text-gray-900">Export as PDF</p>
-                    <p className="text-xs text-gray-500">Download PDF document</p>
-                  </div>
-                </button>
-                <button
-                  onClick={exportToExcel}
-                  className="w-full px-4 py-2.5 text-left text-sm hover:bg-gray-50 flex items-center gap-3 transition-colors"
-                >
-                  <FileSpreadsheet size={16} className="text-green-600" />
-                  <div>
-                    <p className="font-medium text-gray-900">Export as Excel</p>
-                    <p className="text-xs text-gray-500">Download XLSX spreadsheet</p>
-                  </div>
-                </button>
-              </div>
+            className={cn(
+              "sm:hidden w-full px-4 py-3 rounded-lg border-2 transition-all duration-200",
+              showMobileFilters 
+                ? "border-blue-500 bg-blue-50 text-blue-700" 
+                : "border-gray-300 bg-white text-gray-700 hover:border-gray-400 hover:bg-gray-50",
+              "active:scale-[0.98] flex items-center justify-center gap-2 text-sm font-semibold shadow-sm"
             )}
-          </div>
+          >
+            <Filter size={18} className="flex-shrink-0" />
+            <span>{showMobileFilters ? 'Hide Filters' : 'Show Filters'}</span>
+          </button>
+          
+          {/* Primary Actions Row - Side by Side on Mobile */}
+          <div className="flex gap-2 w-full sm:w-auto">
+            {/* Export Dropdown - Responsive */}
+            <div className="relative flex-1 sm:flex-none min-w-0 sm:self-center" ref={exportMenuRef}>
+              <button 
+                onClick={() => setShowExportMenu(!showExportMenu)}
+                disabled={exporting || filteredApps.length === 0}
+                className={cn(
+                  "w-full min-w-[110px] bg-gradient-to-r from-green-600 to-green-700 text-white",
+                  "px-4 sm:px-5 py-3 sm:py-2.5 sm:h-11 sm:py-0 rounded-lg flex items-center justify-center gap-2",
+                  "text-sm sm:text-base font-semibold shadow-md",
+                  "hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-200",
+                  "disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:shadow-md"
+                )}
+                title={filteredApps.length === 0 ? 'No data to export' : 'Export data'}
+              >
+                {exporting ? (
+                  <>
+                    <Loader2 size={18} className="sm:w-[18px] sm:h-[18px] animate-spin flex-shrink-0" />
+                    <span className="hidden sm:inline">Exporting...</span>
+                    <span className="sm:hidden truncate">Wait...</span>
+                  </>
+                ) : (
+                  <>
+                    <FileDown size={18} className="sm:w-[18px] sm:h-[18px] flex-shrink-0" />
+                    <span className="hidden sm:inline">Export</span>
+                    <span className="sm:hidden truncate">Export</span>
+                    <ChevronDown size={16} className="flex-shrink-0 ml-0.5" />
+                  </>
+                )}
+              </button>
 
+              {/* Dropdown Menu - Mobile Enhanced */}
+              {showExportMenu && !exporting && (
+                <div className="absolute right-0 left-0 sm:left-auto sm:right-0 mt-2 sm:w-56 bg-white rounded-xl shadow-2xl border-2 border-gray-200 z-50 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
+                  <button
+                    onClick={exportToPDF}
+                    className="w-full px-4 py-3.5 text-left hover:bg-red-50 active:bg-red-100 flex items-center gap-3 transition-colors border-b border-gray-100"
+                  >
+                    <div className="w-10 h-10 rounded-lg bg-red-100 flex items-center justify-center flex-shrink-0">
+                      <FileDown size={20} className="text-red-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-gray-900 text-sm">Export as PDF</p>
+                      <p className="text-xs text-gray-500 truncate">Download PDF document</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={exportToExcel}
+                    className="w-full px-4 py-3.5 text-left hover:bg-green-50 active:bg-green-100 flex items-center gap-3 transition-colors"
+                  >
+                    <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center flex-shrink-0">
+                      <FileSpreadsheet size={20} className="text-green-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-gray-900 text-sm">Export as Excel</p>
+                      <p className="text-xs text-gray-500 truncate">Download XLSX spreadsheet</p>
+                    </div>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Capture Button - Primary Action */}
             <button 
               onClick={() => setShowModal(true)} 
-            className={cn(
-              "bg-gradient-to-r from-nwsdbBlue to-blue-700 text-white",
-              "px-4 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center justify-center gap-2 text-sm sm:text-base",
-              "hover:shadow-lg hover:scale-105 transition-all duration-200",
-              "whitespace-nowrap"
-            )}
-          >
-            <Plus size={16} className="sm:w-[18px] sm:h-[18px]" />
-              <span className="hidden sm:inline">Add Capture Location</span>
-              <span className="sm:hidden">Capture</span>
+              className={cn(
+                "flex-1 sm:flex-none min-w-[130px] bg-gradient-to-r from-nwsdbBlue to-blue-700 text-white",
+                "px-4 sm:px-5 py-3 sm:py-2.5 sm:h-11 sm:py-0 rounded-lg flex items-center justify-center gap-2",
+                "text-sm sm:text-base font-semibold shadow-md",
+                "hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-200",
+                "ring-2 ring-blue-400/20"
+              )}
+            >
+              <Plus size={18} className="sm:w-[18px] sm:h-[18px] flex-shrink-0" />
+              <span className="hidden sm:inline">Capture Location</span>
+              <span className="sm:hidden truncate">Capture</span>
             </button>
+          </div>
         </div>
       </div>
 
@@ -989,14 +1009,19 @@ const Dashboard = () => {
                     <p className="text-sm font-semibold text-gray-900">{app.note || 'No note'}</p>
                   </div>
                   
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div>
+                  <div className="space-y-1 text-xs">
+                    <div className="flex items-center gap-2">
                       <span className="text-gray-500">Account:</span>
-                      <span className="ml-1 font-mono text-gray-700">{app.accountNumber || 'N/A'}</span>
+                      <span className="font-mono text-gray-700 truncate">{app.accountNumber || 'N/A'}</span>
                     </div>
-                    <div>
+                    <div className="flex items-center gap-2">
                       <span className="text-gray-500">GPS:</span>
-                      <span className="ml-1 text-gray-700">{hasValidGPS(app.gps) ? 'Captured' : 'Not captured'}</span>
+                      <span className={cn(
+                        "font-medium",
+                        hasValidGPS(app.gps) ? "text-green-700" : "text-orange-700"
+                      )}>
+                        {hasValidGPS(app.gps) ? 'Captured' : 'Not captured'}
+                      </span>
                     </div>
                   </div>
 
@@ -1078,46 +1103,74 @@ const Dashboard = () => {
 
       {/* Modal Overlay */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-xl p-6 sm:p-8 w-full max-w-lg shadow-2xl animate-in fade-in zoom-in duration-200 max-h-[90vh] overflow-y-auto">
-            <h2 className="text-lg sm:text-xl font-bold mb-4 sm:mb-6 text-gray-800">Capture Connection Location</h2>
+        <div
+          className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50 backdrop-blur-sm p-0 sm:p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !creating) {
+              setShowModal(false);
+              reset();
+            }
+          }}
+        >
+          <div className="bg-white rounded-t-3xl sm:rounded-xl p-4 sm:p-6 md:p-8 w-full max-w-lg shadow-2xl animate-in fade-in slide-in-from-bottom sm:zoom-in duration-300 max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4 sm:mb-6 pb-3 border-b border-gray-200 sm:border-0">
+              <h2 className="text-base sm:text-lg md:text-xl font-bold text-gray-900">Capture Connection Location</h2>
+              <button
+                type="button"
+                onClick={() => { setShowModal(false); reset(); }}
+                className="sm:hidden p-2 rounded-full hover:bg-gray-100 active:bg-gray-200 transition-colors"
+                aria-label="Close"
+              >
+                <X size={20} className="text-gray-500" />
+              </button>
+            </div>
+            <p className="text-xs sm:text-sm text-gray-500 -mt-2 mb-3 sm:mb-4">
+              Fill required fields and capture GPS before saving.
+            </p>
+
             <form onSubmit={handleSubmit(onCreate)} className="space-y-3 sm:space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                <label className="block text-xs sm:text-sm font-semibold text-gray-700 mb-2">
                   Account Number <span className="text-red-500">*</span>
                 </label>
-                <input 
-                  {...register("accountNumber", { 
+                <input
+                  {...register("accountNumber", {
                     required: "Account number is required",
                     onChange: (e) => {
                       e.target.value = formatAccountNumber(e.target.value || '');
                     }
-                  })} 
+                  })}
                   className={cn(
-                    "w-full border p-2.5 sm:p-2 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-base sm:text-sm",
-                    errors.accountNumber && "border-red-500"
+                    "w-full border-2 px-3 py-3 sm:py-2.5 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-base sm:text-sm transition-colors",
+                    errors.accountNumber ? "border-red-500 bg-red-50" : "border-gray-300"
                   )}
-                  placeholder="e.g. 42/08/310/014/17" 
+                  placeholder="e.g. 42/08/310/014/17"
+                  inputMode="numeric"
+                  autoComplete="off"
                 />
                 {errors.accountNumber && (
-                  <p className="text-red-500 text-xs mt-1">{errors.accountNumber.message as string}</p>
+                  <p className="text-red-600 text-xs sm:text-sm mt-1.5 flex items-center gap-1">
+                    <span className="inline-block w-1 h-1 rounded-full bg-red-600"></span>
+                    {errors.accountNumber.message as string}
+                  </p>
                 )}
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                <label className="block text-xs sm:text-sm font-semibold text-gray-700 mb-2">
                   Note
                 </label>
                 <textarea
                   {...register("note")}
-                  className="w-full border p-2.5 sm:p-2 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none resize-none text-base sm:text-sm"
-                  placeholder="Add location note"
-                  rows={2}
+                  className="w-full border-2 border-gray-300 px-3 py-3 sm:py-2.5 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none resize-none text-base sm:text-sm transition-colors"
+                  placeholder="Add location note (optional)"
+                  rows={3}
+                  maxLength={300}
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                <label className="block text-xs sm:text-sm font-semibold text-gray-700 mb-2">
                   Select Categories
                 </label>
                 <CategorySelector
@@ -1127,7 +1180,7 @@ const Dashboard = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                <label className="block text-xs sm:text-sm font-semibold text-gray-700 mb-2">
                   Capture GPS Location <span className="text-red-500">*</span>
                 </label>
                 <GPSCapture
@@ -1139,59 +1192,67 @@ const Dashboard = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                <label className="block text-xs sm:text-sm font-semibold text-gray-700 mb-2">
                   Capture Date & Time (Auto)
                 </label>
                 <input
                   value={captureDateTime}
                   readOnly
-                  className="w-full border p-2.5 sm:p-2 rounded-lg bg-gray-50 text-base sm:text-sm"
+                  className="w-full border-2 border-gray-200 px-3 py-3 sm:py-2.5 rounded-lg bg-gray-50 text-gray-600 text-base sm:text-sm cursor-not-allowed"
                   placeholder="Auto filled when GPS captured"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Address (Auto from GPS)
+                <label className="text-xs sm:text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+                  <span>Address (Auto from GPS)</span>
+                  {autoAddressLoading && (
+                    <span className="inline-flex items-center gap-1 text-blue-600 text-xs font-medium">
+                      <Loader2 size={12} className="animate-spin" />
+                      Fetching...
+                    </span>
+                  )}
                 </label>
-                <textarea 
-                  {...register("address")} 
+                <textarea
+                  {...register("address")}
                   className={cn(
-                    "w-full border p-2.5 sm:p-2 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none resize-none text-base sm:text-sm",
-                    autoAddressLoading && "bg-gray-50"
+                    "w-full border-2 border-gray-300 px-3 py-3 sm:py-2.5 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none resize-none text-base sm:text-sm transition-colors",
+                    autoAddressLoading && "bg-gray-50 animate-pulse"
                   )}
                   placeholder={autoAddressLoading ? "Fetching address from map..." : "Address will auto-fill from captured GPS"}
                   rows={3}
                 />
               </div>
-              <div className="flex gap-3 mt-6">
-                <button 
-                  type="button" 
-                  onClick={() => { setShowModal(false); reset(); }} 
+
+              <div className="flex flex-col-reverse sm:flex-row gap-2 sm:gap-3 pt-2 sm:pt-4 sticky bottom-0 bg-white sm:static -mx-4 sm:mx-0 px-4 sm:px-0 pb-4 sm:pb-0 border-t sm:border-0 border-gray-200">
+                <button
+                  type="button"
+                  onClick={() => { setShowModal(false); reset(); }}
                   disabled={creating}
-                  className="flex-1 bg-gray-100 text-gray-700 py-2.5 sm:py-2 rounded-lg hover:bg-gray-200 disabled:opacity-50 font-medium text-base sm:text-sm"
+                  className="flex-1 bg-gray-100 text-gray-700 py-3 sm:py-2.5 rounded-lg hover:bg-gray-200 active:bg-gray-300 disabled:opacity-50 font-semibold text-base sm:text-sm transition-all active:scale-[0.98] order-2 sm:order-1"
                 >
                   Cancel
                 </button>
-                <button 
-                  type="submit" 
+                <button
+                  type="submit"
                   disabled={creating}
                   className={cn(
-                    "flex-1 bg-nwsdbBlue text-white py-2.5 sm:py-2 rounded-lg hover:bg-blue-700 font-medium text-base sm:text-sm",
+                    "flex-1 bg-gradient-to-r from-nwsdbBlue to-blue-700 text-white py-3 sm:py-2.5 rounded-lg hover:shadow-lg font-semibold text-base sm:text-sm",
                     "flex items-center justify-center gap-2",
-                    "disabled:opacity-50 disabled:cursor-not-allowed"
+                    "disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:scale-[1.02] active:scale-[0.98]",
+                    "order-1 sm:order-2"
                   )}
                 >
                   {creating ? (
                     <>
-                      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                      <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 04 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                       </svg>
-                      Creating...
+                      <span>Creating...</span>
                     </>
                   ) : (
-                    'Save Captured Location'
+                    "Save Captured Location"
                   )}
                 </button>
               </div>

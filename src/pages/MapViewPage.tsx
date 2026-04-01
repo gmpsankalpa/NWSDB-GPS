@@ -25,12 +25,31 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
 });
 
-// Component to handle map center updates
-const MapController = ({ center }: { center: [number, number] }) => {
+// Component to handle map center/auto-focus updates
+const MapController = ({
+  center,
+  points,
+  autoFocusPoints,
+}: {
+  center: [number, number];
+  points: [number, number][];
+  autoFocusPoints: boolean;
+}) => {
   const map = useMap();
   useEffect(() => {
+    if (autoFocusPoints && points.length > 0) {
+      if (points.length === 1) {
+        map.setView(points[0], 16);
+        return;
+      }
+
+      const bounds = L.latLngBounds(points);
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+      return;
+    }
+
     map.setView(center, map.getZoom());
-  }, [center, map]);
+  }, [autoFocusPoints, points, center, map]);
   return null;
 };
 
@@ -134,6 +153,16 @@ const MapViewPage = () => {
     });
   }, [connections, user, searchQuery, selectedCategories]);
 
+  const markerPositions = useMemo<[number, number][]>(
+    () =>
+      filteredConnections
+        .filter((conn) => conn.gps && hasValidGPS(conn.gps))
+        .map((conn) => [conn.gps!.latitude, conn.gps!.longitude] as [number, number]),
+    [filteredConnections]
+  );
+
+  const shouldAutoFocusPoints = !searchQuery.trim() && !userLocation;
+
   // Auto-center map when account number is searched
   useEffect(() => {
     const queryText = searchQuery.trim();
@@ -198,9 +227,9 @@ const MapViewPage = () => {
 
   return (
     <Layout>
-      <div className="map-scope relative isolate z-0 overflow-hidden rounded-xl border border-gray-200 h-[calc(100vh-180px)] sm:h-[calc(100vh-160px)] md:h-[calc(100vh-140px)] min-h-[520px]">
+      <div className="map-scope relative isolate z-0 overflow-hidden rounded-xl border border-gray-200 h-[calc(100vh-180px)] sm:h-[calc(100vh-160px)] md:h-[calc(100vh-140px)] min-h-[460px] sm:min-h-[520px] bg-gray-100">
         {/* Search Bar - Floating on top */}
-        <div className="absolute top-3 sm:top-4 left-3 right-3 sm:left-4 sm:right-4 z-20 max-w-2xl mx-auto">
+        <div className="absolute top-3 sm:top-4 left-3 right-3 sm:left-4 sm:right-4 z-20 max-w-3xl mx-auto">
           <div className="bg-white rounded-lg shadow-lg border border-gray-200">
             <div className="flex items-center gap-2 px-3 sm:px-4 py-2.5 sm:py-3">
               <Search className="w-5 h-5 text-gray-400 flex-shrink-0" />
@@ -222,14 +251,14 @@ const MapViewPage = () => {
               <button
                 onClick={() => setShowFilters(!showFilters)}
                 className={cn(
-                  "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
+                  "flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
                   (selectedCategories.length > 0)
                     ? "bg-blue-600 text-white"
                     : "bg-gray-100 text-gray-700 hover:bg-gray-200"
                 )}
               >
                 <Filter className="w-4 h-4" />
-                Filter
+                <span className="hidden sm:inline">Filter</span>
                 {selectedCategories.length > 0 && (
                   <span className="bg-white text-blue-600 px-2 py-0.5 rounded-full text-xs font-bold">
                     {selectedCategories.length}
@@ -255,15 +284,25 @@ const MapViewPage = () => {
 
         {/* Filter Panel */}
         {showFilters && (
-          <div className="absolute top-28 sm:top-32 left-3 right-3 sm:left-4 sm:right-auto z-30 w-auto sm:w-80 bg-white rounded-lg shadow-lg border border-gray-200 max-h-[calc(100%-130px)] overflow-auto">
+          <div className="absolute top-24 sm:top-32 left-3 right-3 sm:left-4 sm:right-auto z-30 w-auto sm:w-80 bg-white rounded-lg shadow-lg border border-gray-200 max-h-[calc(100%-120px)] sm:max-h-[calc(100%-140px)] overflow-auto">
             <div className="sticky top-0 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
               <h3 className="font-semibold">Filters</h3>
-              <button
-                onClick={() => setShowFilters(false)}
-                className="p-1 hover:bg-gray-100 rounded"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                {selectedCategories.length > 0 && (
+                  <button
+                    onClick={() => setSelectedCategories([])}
+                    className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                  >
+                    Clear
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowFilters(false)}
+                  className="p-1 hover:bg-gray-100 rounded"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             <div className="p-4 space-y-4">
@@ -275,7 +314,7 @@ const MapViewPage = () => {
                     {categories.map(category => (
                       <label
                         key={category.id}
-                        className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-2 rounded"
+                        className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-2 rounded transition-colors"
                       >
                         <input
                           type="checkbox"
@@ -302,7 +341,7 @@ const MapViewPage = () => {
         <button
           onClick={handleCenterOnUser}
           disabled={gettingLocation}
-          className="absolute bottom-4 right-3 sm:bottom-auto sm:top-4 sm:right-4 z-20 bg-white p-3 rounded-lg shadow-lg border border-gray-200 hover:bg-gray-50 disabled:bg-gray-100"
+          className="absolute bottom-4 right-3 sm:right-4 z-20 bg-white p-3 rounded-lg shadow-lg border border-gray-200 hover:bg-gray-50 disabled:bg-gray-100"
           title="Center on my location"
         >
           {gettingLocation ? (
@@ -319,7 +358,7 @@ const MapViewPage = () => {
           className="w-full h-full"
           zoomControl={true}
         >
-          <MapController center={mapCenter} />
+          <MapController center={mapCenter} points={markerPositions} autoFocusPoints={shouldAutoFocusPoints} />
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -371,7 +410,7 @@ const MapViewPage = () => {
                       </p>
 
                       {/* Actions */}
-                      <div className="flex gap-2 pt-2 border-t">
+                      <div className="flex flex-col sm:flex-row gap-2 pt-2 border-t">
                         <button
                           onClick={() => navigate(`/application/${conn.id}`)}
                           className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-xs font-medium"
