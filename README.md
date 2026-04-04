@@ -101,6 +101,14 @@ npm install
 npm run dev
 ```
 
+### Environment Variables
+
+Set this variable for connection image uploads:
+
+```bash
+VITE_IMGBB_API_KEY=your_imgbb_api_key
+```
+
 ### Build
 
 ```bash

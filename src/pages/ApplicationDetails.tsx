@@ -4,6 +4,7 @@ import { doc, onSnapshot, updateDoc, Timestamp, deleteDoc } from 'firebase/fires
 import { db } from '../firebase';
 import Layout from '../components/Layout';
 import GPSCapture from '../components/GPSCapture';
+import ImageCaptureUpload from '../components/ImageCaptureUpload';
 import CategorySelector, { CategoryBadge } from '../components/CategorySelector';
 import NavigationButton from '../components/NavigationButton';
 import { ArrowLeft, Save, Trash2, Loader2, MapPin, Calendar, FileText } from 'lucide-react';
@@ -32,6 +33,12 @@ const ApplicationDetails = () => {
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [categoryObjects, setCategoryObjects] = useState<Category[]>([]);
   const [captureDateTime, setCaptureDateTime] = useState('');
+  const [connectionImage, setConnectionImage] = useState<{
+    imageUrl: string;
+    displayUrl: string;
+    thumbnailUrl?: string;
+    deleteUrl?: string;
+  } | undefined>();
 
   useEffect(() => {
     if (!loading && !user) navigate('/login');
@@ -75,6 +82,7 @@ const ApplicationDetails = () => {
             appData.lastUpdated?.toDate?.()?.toLocaleString() ||
             ''
         );
+        setConnectionImage(appData.connectionImage || undefined);
 
         const cats = await getCategoriesByIds(appData.categories || []);
         setCategoryObjects(cats);
@@ -125,6 +133,7 @@ const ApplicationDetails = () => {
         note: note.trim(),
         address: address.trim(),
         categories: selectedCategories,
+        connectionImage: connectionImage || null,
         gps: {
           latitude: gpsData.latitude,
           longitude: gpsData.longitude,
@@ -268,6 +277,11 @@ const ApplicationDetails = () => {
                 )}
                 placeholder={autoAddressLoading ? 'Fetching address from map...' : 'Address'}
               />
+            </div>
+
+            <div>
+              <label className="text-xs sm:text-sm font-medium text-gray-700 mb-1.5 block">Connection Image</label>
+              <ImageCaptureUpload value={connectionImage} onChange={setConnectionImage} disabled={saving} />
             </div>
           </div>
 

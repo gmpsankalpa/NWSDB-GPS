@@ -12,6 +12,13 @@ export interface GPSCoordinates {
   capturedBy: string; // user ID
 }
 
+export interface ConnectionImage {
+  imageUrl: string;
+  displayUrl: string;
+  thumbnailUrl?: string;
+  deleteUrl?: string;
+}
+
 // GPS History interface
 export interface GPSHistory {
   id: string;
@@ -98,6 +105,7 @@ export interface Connection {
   
   // GPS Information (MANDATORY for new connections)
   gps?: GPSCoordinates;
+  connectionImage?: ConnectionImage | null;
   
   // Categories (multi-select tags)
   categories?: string[]; // Array of category IDs

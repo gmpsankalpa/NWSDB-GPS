@@ -3,7 +3,7 @@ import { collection, onSnapshot, query, orderBy, addDoc, Timestamp, getDocs, whe
 import { db } from '../firebase';
 import { useNavigate } from 'react-router-dom';
 import { logDataExport } from '../lib/systemLogger';
-import { Plus, Search, Users, Activity, Filter, X, AlertCircle, Building2, Loader2, FileDown, ChevronDown, FileSpreadsheet, User, Mail, Shield, ChevronUp, MapPin, Navigation, Eye } from 'lucide-react';
+import { Plus, Search, Users, Activity, Filter, X, AlertCircle, Building2, Loader2, FileDown, ChevronDown, FileSpreadsheet, User, Mail, Shield, ChevronUp, MapPin, Navigation, Eye, Image as ImageIcon } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import toast, { Toaster } from 'react-hot-toast';
 import Layout from '../components/Layout';
@@ -14,6 +14,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import GPSCapture from '../components/GPSCapture';
+import ImageCaptureUpload from '../components/ImageCaptureUpload';
 import CategorySelector, { CategoryBadge } from '../components/CategorySelector';
 import { hasValidGPS, navigateToLocation } from '../lib/gpsUtils';
 import { getActiveCategories } from '../lib/categoryService';
@@ -38,6 +39,7 @@ const Dashboard = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [officeFilter, setOfficeFilter] = useState<Office | 'All'>('All');
   const [categoryFilters, setCategoryFilters] = useState<string[]>([]);
+  const [imageFilter, setImageFilter] = useState<'all' | 'with' | 'without'>('all');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [creating, setCreating] = useState(false);
@@ -58,6 +60,109 @@ const Dashboard = () => {
   const [categories, setCategories] = useState<Category[]>([]);
   const [captureDateTime, setCaptureDateTime] = useState('');
   const [autoAddressLoading, setAutoAddressLoading] = useState(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [imageZoom, setImageZoom] = useState(1);
+  const [imageOffset, setImageOffset] = useState({ x: 0, y: 0 });
+  const [lastTapTime, setLastTapTime] = useState(0);
+  const [connectionImage, setConnectionImage] = useState<{
+    imageUrl: string;
+    displayUrl: string;
+    thumbnailUrl?: string;
+    deleteUrl?: string;
+  } | undefined>();
+  const pinchStartDistanceRef = useRef<number | null>(null);
+  const pinchStartZoomRef = useRef(1);
+  const dragStartPointRef = useRef<{ x: number; y: number } | null>(null);
+  const dragStartOffsetRef = useRef({ x: 0, y: 0 });
+
+  const closeModalAndReset = () => {
+    setShowModal(false);
+    reset();
+    setGpsData(undefined);
+    setSelectedCategories([]);
+    setCaptureDateTime('');
+    setConnectionImage(undefined);
+  };
+
+  const getImageThumbUrl = (app: any) =>
+    app?.connectionImage?.thumbnailUrl || app?.connectionImage?.displayUrl || app?.connectionImage?.imageUrl || '';
+
+  const getImageFullUrl = (app: any) =>
+    app?.connectionImage?.displayUrl || app?.connectionImage?.imageUrl || app?.connectionImage?.thumbnailUrl || '';
+
+  const resetPreviewView = () => {
+    setPreviewImageUrl(null);
+    setImageZoom(1);
+    setImageOffset({ x: 0, y: 0 });
+    pinchStartDistanceRef.current = null;
+    dragStartPointRef.current = null;
+  };
+
+  const clampZoom = (zoom: number) => Math.max(1, Math.min(4, zoom));
+
+  const getTouchDistance = (touches: React.TouchList) => {
+    if (touches.length < 2) return 0;
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.hypot(dx, dy);
+  };
+
+  const handlePreviewTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length === 2) {
+      pinchStartDistanceRef.current = getTouchDistance(e.touches);
+      pinchStartZoomRef.current = imageZoom;
+      dragStartPointRef.current = null;
+      return;
+    }
+
+    if (e.touches.length === 1 && imageZoom > 1) {
+      dragStartPointRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      dragStartOffsetRef.current = imageOffset;
+    }
+  };
+
+  const handlePreviewTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length === 2 && pinchStartDistanceRef.current) {
+      e.preventDefault();
+      const currentDistance = getTouchDistance(e.touches);
+      if (!currentDistance) return;
+      const scaleRatio = currentDistance / pinchStartDistanceRef.current;
+      setImageZoom(clampZoom(pinchStartZoomRef.current * scaleRatio));
+      return;
+    }
+
+    if (e.touches.length === 1 && dragStartPointRef.current && imageZoom > 1) {
+      e.preventDefault();
+      const dx = e.touches[0].clientX - dragStartPointRef.current.x;
+      const dy = e.touches[0].clientY - dragStartPointRef.current.y;
+      setImageOffset({
+        x: dragStartOffsetRef.current.x + dx,
+        y: dragStartOffsetRef.current.y + dy,
+      });
+    }
+  };
+
+  const handlePreviewTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length < 2) {
+      pinchStartDistanceRef.current = null;
+    }
+    if (e.touches.length === 0) {
+      dragStartPointRef.current = null;
+    }
+  };
+
+  const handlePreviewDoubleTap = () => {
+    const now = Date.now();
+    if (now - lastTapTime < 280) {
+      if (imageZoom > 1) {
+        setImageZoom(1);
+        setImageOffset({ x: 0, y: 0 });
+      } else {
+        setImageZoom(2);
+      }
+    }
+    setLastTapTime(now);
+  };
 
   const normalizeCategoryToken = (value: unknown) => String(value || '').trim().toLowerCase();
   const categoryNameById = useMemo(
@@ -141,6 +246,14 @@ const Dashboard = () => {
       // Office filter (for Regional Engineer)
       if (officeFilter !== 'All' && app.office !== officeFilter) return false;
 
+      const hasImage = !!(
+        app?.connectionImage?.imageUrl ||
+        app?.connectionImage?.displayUrl ||
+        app?.connectionImage?.thumbnailUrl
+      );
+      if (imageFilter === 'with' && !hasImage) return false;
+      if (imageFilter === 'without' && hasImage) return false;
+
       // Category filter
       if (categoryFilters.length > 0) {
         const appCategoryValues = new Set<string>();
@@ -204,7 +317,7 @@ const Dashboard = () => {
       
       return matchesSearch && matchesDate;
     });
-  }, [apps, searchQuery, officeFilter, categoryFilters, fromDate, toDate, user, categoryNameById]);
+  }, [apps, searchQuery, officeFilter, categoryFilters, imageFilter, fromDate, toDate, user, categoryNameById]);
 
   const stats = useMemo(() => ({
     total: filteredApps.length,
@@ -461,14 +574,11 @@ const Dashboard = () => {
         captureDateTime: Timestamp.now(),
         gps: gpsField,
         categories: selectedCategories.length > 0 ? selectedCategories : [],
+        connectionImage: connectionImage || null,
       });
 
       toast.success("Location captured and connection saved successfully!");
-      setShowModal(false);
-      reset();
-      setGpsData(undefined);
-      setSelectedCategories([]);
-      setCaptureDateTime('');
+      closeModalAndReset();
     } catch (e: any) {
       console.error("Error creating application:", e);
       toast.error(e?.message || "Error saving captured location. Please try again.");
@@ -598,7 +708,7 @@ const Dashboard = () => {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
             <input 
               type="text" 
-              placeholder="Search Account No, Note, Address..." 
+              placeholder="Search Account No, Address..." 
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className={cn(
@@ -678,6 +788,22 @@ const Dashboard = () => {
             )}
           </div>
 
+          <div className="relative w-full sm:w-auto">
+            <ImageIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+            <select
+              value={imageFilter}
+              onChange={(e) => setImageFilter(e.target.value as 'all' | 'with' | 'without')}
+              className={cn(
+                "pl-10 pr-8 py-2 sm:py-2.5 w-full sm:w-48 bg-white border border-gray-300 rounded-lg text-sm",
+                "focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all appearance-none cursor-pointer"
+              )}
+            >
+              <option value="all">All Images</option>
+              <option value="with">With Image</option>
+              <option value="without">No Image</option>
+            </select>
+          </div>
+
           {categoryFilters.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 sm:max-w-md">
               {categoryFilters.map((categoryId) => {
@@ -743,6 +869,15 @@ const Dashboard = () => {
                 onClick={() => setCategoryFilters([])}
                 className="px-3 py-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
                 title="Clear category filter"
+              >
+                <X size={18} />
+              </button>
+            )}
+            {imageFilter !== 'all' && (
+              <button
+                onClick={() => setImageFilter('all')}
+                className="px-3 py-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                title="Clear image filter"
               >
                 <X size={18} />
               </button>
@@ -858,7 +993,7 @@ const Dashboard = () => {
               <tr>
                 <th className="px-6 py-4">Account Number</th>
                 {user.role === ROLES.REGIONAL_ENGINEER && <th className="px-6 py-4">Office</th>}
-                <th className="px-6 py-4">Note</th>
+                <th className="px-6 py-4">Image</th>
                 <th className="px-6 py-4">Captured At</th>
                 <th className="px-6 py-4">Categories</th>
                 <th className="px-6 py-4">GPS</th>
@@ -894,7 +1029,28 @@ const Dashboard = () => {
                         </span>
                       </td>
                     )}
-                    <td className="px-6 py-4 text-gray-700">{app.note || '-'}</td>
+                    <td className="px-6 py-4">
+                      {getImageThumbUrl(app) ? (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPreviewImageUrl(getImageFullUrl(app));
+                            setImageZoom(1);
+                            setImageOffset({ x: 0, y: 0 });
+                          }}
+                          className="inline-block rounded-md overflow-hidden border border-gray-200 hover:ring-2 hover:ring-blue-400"
+                          title="Open image"
+                        >
+                          <img
+                            src={getImageThumbUrl(app)}
+                            alt="Connection"
+                            className="w-10 h-10 object-cover bg-gray-100"
+                          />
+                        </button>
+                      ) : (
+                        <span className="text-xs text-gray-400">-</span>
+                      )}
+                    </td>
                     <td className="px-6 py-4 text-gray-600 text-xs">{formatDate(app.captureDateTime || app.lastUpdated)}</td>
                     <td className="px-6 py-4">
                       {connCategories.length > 0 ? (
@@ -1001,13 +1157,34 @@ const Dashboard = () => {
                       </span>
                     )}
                   </div>
+                  {getImageThumbUrl(app) ? (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setPreviewImageUrl(getImageFullUrl(app));
+                        setImageZoom(1);
+                        setImageOffset({ x: 0, y: 0 });
+                      }}
+                      className="ml-2 inline-block rounded-lg overflow-hidden border border-gray-200 shadow-sm"
+                      title="Open image"
+                    >
+                      <img
+                        src={getImageThumbUrl(app)}
+                        alt="Connection"
+                        className="w-16 h-16 object-cover bg-gray-100"
+                      />
+                    </button>
+                  ) : null}
                 </div>
 
                 {/* Details */}
                 <div className="space-y-2">
-                  <div>
-                    <p className="text-sm font-semibold text-gray-900">{app.note || 'No note'}</p>
-                  </div>
+                  {!getImageThumbUrl(app) && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-500 text-xs">Image:</span>
+                      <span className="text-xs text-gray-400">No image</span>
+                    </div>
+                  )}
                   
                   <div className="space-y-1 text-xs">
                     <div className="flex items-center gap-2">
@@ -1107,8 +1284,7 @@ const Dashboard = () => {
           className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50 backdrop-blur-sm p-0 sm:p-4"
           onClick={(e) => {
             if (e.target === e.currentTarget && !creating) {
-              setShowModal(false);
-              reset();
+              closeModalAndReset();
             }
           }}
         >
@@ -1117,7 +1293,7 @@ const Dashboard = () => {
               <h2 className="text-base sm:text-lg md:text-xl font-bold text-gray-900">Capture Connection Location</h2>
               <button
                 type="button"
-                onClick={() => { setShowModal(false); reset(); }}
+                onClick={closeModalAndReset}
                 className="sm:hidden p-2 rounded-full hover:bg-gray-100 active:bg-gray-200 transition-colors"
                 aria-label="Close"
               >
@@ -1193,6 +1369,18 @@ const Dashboard = () => {
 
               <div>
                 <label className="block text-xs sm:text-sm font-semibold text-gray-700 mb-2">
+                  Connection Image (Optional)
+                </label>
+                <ImageCaptureUpload
+                  value={connectionImage}
+                  onChange={setConnectionImage}
+                  disabled={creating}
+                  showInlinePreview={false}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs sm:text-sm font-semibold text-gray-700 mb-2">
                   Capture Date & Time (Auto)
                 </label>
                 <input
@@ -1227,7 +1415,7 @@ const Dashboard = () => {
               <div className="flex flex-col-reverse sm:flex-row gap-2 sm:gap-3 pt-2 sm:pt-4 sticky bottom-0 bg-white sm:static -mx-4 sm:mx-0 px-4 sm:px-0 pb-4 sm:pb-0 border-t sm:border-0 border-gray-200">
                 <button
                   type="button"
-                  onClick={() => { setShowModal(false); reset(); }}
+                  onClick={closeModalAndReset}
                   disabled={creating}
                   className="flex-1 bg-gray-100 text-gray-700 py-3 sm:py-2.5 rounded-lg hover:bg-gray-200 active:bg-gray-300 disabled:opacity-50 font-semibold text-base sm:text-sm transition-all active:scale-[0.98] order-2 sm:order-1"
                 >
@@ -1257,6 +1445,54 @@ const Dashboard = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {previewImageUrl && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm p-3 sm:p-6 flex items-center justify-center"
+          onClick={resetPreviewView}
+        >
+          <div
+            className="relative w-full max-w-4xl max-h-[90vh] overflow-hidden touch-none"
+            onClick={(e) => e.stopPropagation()}
+            onTouchStart={handlePreviewTouchStart}
+            onTouchMove={handlePreviewTouchMove}
+            onTouchEnd={handlePreviewTouchEnd}
+          >
+            <button
+              type="button"
+              onClick={resetPreviewView}
+              className="absolute top-2 right-2 sm:top-3 sm:right-3 z-10 p-2 rounded-full bg-black/60 text-white hover:bg-black/80"
+              aria-label="Close image preview"
+            >
+              <X size={20} />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setImageZoom(1);
+                setImageOffset({ x: 0, y: 0 });
+              }}
+              className="absolute top-2 left-2 sm:top-3 sm:left-3 z-10 px-2.5 py-1.5 rounded-full bg-black/60 text-white text-xs hover:bg-black/80"
+            >
+              Reset Zoom
+            </button>
+            <img
+              src={previewImageUrl}
+              alt="Connection preview"
+              onDoubleClick={handlePreviewDoubleTap}
+              className="w-full h-auto max-h-[90vh] object-contain rounded-xl bg-black select-none"
+              style={{
+                transform: `translate(${imageOffset.x}px, ${imageOffset.y}px) scale(${imageZoom})`,
+                transition: 'transform 120ms ease-out',
+                transformOrigin: 'center center',
+              }}
+            />
+            <p className="absolute bottom-2 left-1/2 -translate-x-1/2 text-xs text-white/80 bg-black/50 px-2 py-1 rounded">
+              Pinch or double-tap to zoom
+            </p>
           </div>
         </div>
       )}
