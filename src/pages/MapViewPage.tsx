@@ -1,9 +1,9 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import { collection, query, onSnapshot, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
-import { useNavigate } from 'react-router-dom';
-import { MapPin, Filter, X, Search, Loader2, Eye, Crosshair } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { MapPin, Filter, X, Search, Loader2, Eye, Crosshair, Layers, ListFilter } from 'lucide-react';
 import Layout from '../components/Layout';
 import NavigationButton from '../components/NavigationButton';
 import { CategoryBadge, CategoryIcon } from '../components/CategorySelector';
@@ -11,7 +11,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { hasOfficeAccess, type Office } from '../lib/offices';
 import { getActiveCategories } from '../lib/categoryService';
 import type { Connection, Category } from '../lib/types';
-import { hasValidGPS, formatCoordinates } from '../lib/gpsUtils';
+import { hasValidGPS, formatCoordinates, calculateDistance, formatDistance } from '../lib/gpsUtils';
 import { cn } from '../lib/utils';
 import toast from 'react-hot-toast';
 import 'leaflet/dist/leaflet.css';
@@ -54,21 +54,25 @@ const MapController = ({
 };
 
 // Custom marker icon (category color preferred)
-const getMarkerIcon = (color?: string) => {
+const getMarkerIcon = (color?: string, highlighted: boolean = false) => {
   const markerColor = color || '#3B82F6';
+  const size = highlighted ? 38 : 30;
+  const border = highlighted ? 4 : 3;
+  const shadow = highlighted ? '0 0 0 4px rgba(16, 185, 129, 0.35), 0 4px 12px rgba(0,0,0,0.35)' : '0 2px 8px rgba(0,0,0,0.3)';
   
   return L.divIcon({
-    html: `<div style="background-color: ${markerColor}; width: 30px; height: 30px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"></div>`,
+    html: `<div style="background-color: ${markerColor}; width: ${size}px; height: ${size}px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: ${border}px solid white; box-shadow: ${shadow};"></div>`,
     className: 'custom-marker',
-    iconSize: [30, 30],
-    iconAnchor: [15, 30],
-    popupAnchor: [0, -30]
+    iconSize: [size, size],
+    iconAnchor: [Math.floor(size / 2), size],
+    popupAnchor: [0, -size]
   });
 };
 
 const MapViewPage = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,6 +82,13 @@ const MapViewPage = () => {
   const [mapCenter, setMapCenter] = useState<[number, number]>([7.8731, 80.7718]); // Sri Lanka center
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [gettingLocation, setGettingLocation] = useState(false);
+  const [mapStyle, setMapStyle] = useState<'standard' | 'light'>('standard');
+  const [showNearby, setShowNearby] = useState(false);
+  const [loadingNearby, setLoadingNearby] = useState(false);
+  const [highlightedConnectionId, setHighlightedConnectionId] = useState<string | null>(null);
+  const [pendingPopupConnectionId, setPendingPopupConnectionId] = useState<string | null>(null);
+  const markerRefs = useRef<Record<string, L.Marker | null>>({});
+  const focusConnectionId = (location.state as { focusConnection?: string } | null)?.focusConnection;
 
   const normalizeSearchText = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
   const categoryById = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories]);
@@ -129,6 +140,9 @@ const MapViewPage = () => {
       // Must have valid GPS
       if (!hasValidGPS(conn.gps)) return false;
 
+      // Focus mode (opened from dashboard map button)
+      if (focusConnectionId && conn.id !== focusConnectionId) return false;
+
       // Search filter
       if (searchQuery) {
         const query = searchQuery.toLowerCase();
@@ -151,7 +165,7 @@ const MapViewPage = () => {
 
       return true;
     });
-  }, [connections, user, searchQuery, selectedCategories]);
+  }, [connections, user, searchQuery, selectedCategories, focusConnectionId]);
 
   const markerPositions = useMemo<[number, number][]>(
     () =>
@@ -162,6 +176,58 @@ const MapViewPage = () => {
   );
 
   const shouldAutoFocusPoints = !searchQuery.trim() && !userLocation;
+
+  useEffect(() => {
+    if (!focusConnectionId) return;
+    const focusedConnection = filteredConnections.find((conn) => conn.id === focusConnectionId);
+    if (!focusedConnection?.gps || !hasValidGPS(focusedConnection.gps)) return;
+
+    setMapCenter([focusedConnection.gps.latitude, focusedConnection.gps.longitude]);
+    setHighlightedConnectionId(focusedConnection.id);
+    setPendingPopupConnectionId(focusedConnection.id);
+  }, [focusConnectionId, filteredConnections]);
+
+  useEffect(() => {
+    if (!pendingPopupConnectionId) return;
+
+    const marker = markerRefs.current[pendingPopupConnectionId];
+    if (marker) {
+      marker.openPopup();
+      setShowNearby(false);
+      setPendingPopupConnectionId(null);
+      return;
+    }
+
+    const retryTimer = window.setTimeout(() => {
+      const retryMarker = markerRefs.current[pendingPopupConnectionId];
+      if (retryMarker) {
+        retryMarker.openPopup();
+        setShowNearby(false);
+      }
+      setPendingPopupConnectionId(null);
+    }, 220);
+
+    return () => window.clearTimeout(retryTimer);
+  }, [pendingPopupConnectionId, showNearby, filteredConnections]);
+
+  const nearbyConnections = useMemo(() => {
+    if (!userLocation) return [];
+
+    return filteredConnections
+      .map((conn) => {
+        if (!conn.gps || !hasValidGPS(conn.gps)) return null;
+        const distanceKm = calculateDistance(
+          userLocation[0],
+          userLocation[1],
+          conn.gps.latitude,
+          conn.gps.longitude
+        );
+        return { conn, distanceKm };
+      })
+      .filter((item): item is { conn: Connection; distanceKm: number } => !!item)
+      .sort((a, b) => a.distanceKm - b.distanceKm)
+      .slice(0, 20);
+  }, [filteredConnections, userLocation]);
 
   // Auto-center map when account number is searched
   useEffect(() => {
@@ -185,21 +251,45 @@ const MapViewPage = () => {
     }
   }, [searchQuery, filteredConnections]);
 
-  const handleCenterOnUser = () => {
+  const requestUserLocation = (): Promise<[number, number] | null> =>
+    new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => resolve([position.coords.latitude, position.coords.longitude]),
+        () => resolve(null),
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    });
+
+  const handleCenterOnUser = async () => {
     setGettingLocation(true);
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const userPos: [number, number] = [position.coords.latitude, position.coords.longitude];
-        setUserLocation(userPos);
-        setMapCenter(userPos);
-        setGettingLocation(false);
-        toast.success('Centered on your location');
-      },
-      () => {
-        setGettingLocation(false);
-        toast.error('Unable to get your location');
-      }
-    );
+    const userPos = await requestUserLocation();
+    setGettingLocation(false);
+
+    if (!userPos) {
+      toast.error('Unable to get your location');
+      return;
+    }
+
+    setUserLocation(userPos);
+    setMapCenter(userPos);
+    toast.success('Centered on your location');
+  };
+
+  const handleNearbyMe = async () => {
+    setShowNearby(true);
+    if (userLocation) return;
+
+    setLoadingNearby(true);
+    const userPos = await requestUserLocation();
+    setLoadingNearby(false);
+
+    if (!userPos) {
+      toast.error('Please allow location access to use Nearby Me');
+      return;
+    }
+
+    setUserLocation(userPos);
+    setMapCenter(userPos);
   };
 
   const handleToggleCategory = (categoryId: string) => {
@@ -227,9 +317,9 @@ const MapViewPage = () => {
 
   return (
     <Layout>
-      <div className="map-scope relative isolate z-0 overflow-hidden rounded-xl border border-gray-200 h-[calc(100vh-180px)] sm:h-[calc(100vh-160px)] md:h-[calc(100vh-140px)] min-h-[460px] sm:min-h-[520px] bg-gray-100">
+      <div className="map-scope relative isolate z-0 overflow-hidden rounded-none sm:rounded-none border-0 h-[calc(100vh-68px)] sm:h-[calc(100vh-76px)] bg-gray-100">
         {/* Search Bar - Floating on top */}
-        <div className="absolute top-3 sm:top-4 left-3 right-3 sm:left-4 sm:right-4 z-20 max-w-3xl mx-auto">
+        <div className="absolute top-3 sm:top-4 left-3 right-3 sm:left-4 sm:right-4 z-20 max-w-3xl">
           <div className="bg-white rounded-lg shadow-lg border border-gray-200">
             <div className="flex items-center gap-2 px-3 sm:px-4 py-2.5 sm:py-3">
               <Search className="w-5 h-5 text-gray-400 flex-shrink-0" />
@@ -255,20 +345,28 @@ const MapViewPage = () => {
                   (selectedCategories.length > 0)
                     ? "bg-blue-600 text-white"
                     : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                )}
-              >
-                <Filter className="w-4 h-4" />
-                <span className="hidden sm:inline">Filter</span>
-                {selectedCategories.length > 0 && (
+                  )}
+                >
+                  <Filter className="w-4 h-4" />
+                  <span className="hidden sm:inline">Filter</span>
+                  {selectedCategories.length > 0 && (
                   <span className="bg-white text-blue-600 px-2 py-0.5 rounded-full text-xs font-bold">
                     {selectedCategories.length}
                   </span>
-                )}
+                  )}
+                </button>
+              <button
+                onClick={() => setMapStyle((prev) => (prev === 'standard' ? 'light' : 'standard'))}
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
+                title="Toggle map style"
+              >
+                <Layers className="w-4 h-4" />
+                <span className="hidden sm:inline">{mapStyle === 'standard' ? 'Light' : 'Standard'}</span>
               </button>
             </div>
 
             {/* Results count */}
-            <div className="px-3 sm:px-4 py-2 bg-gray-50 border-t border-gray-200 flex items-center justify-between text-xs text-gray-600">
+            <div className="px-3 sm:px-4 py-2 bg-gray-50 border-t border-gray-200 flex items-center justify-between text-xs text-gray-600 gap-2">
               <span className="truncate pr-2">{filteredConnections.length} connection{filteredConnections.length !== 1 ? 's' : ''} on map</span>
               {(selectedCategories.length > 0 || searchQuery) && (
                 <button
@@ -279,6 +377,35 @@ const MapViewPage = () => {
                 </button>
               )}
             </div>
+            {(selectedCategories.length > 0 || searchQuery) && (
+              <div className="px-3 sm:px-4 py-2 border-t border-gray-100 bg-blue-50/50 flex flex-wrap items-center gap-1.5">
+                {searchQuery && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs bg-white border border-blue-200 text-blue-700">
+                    <Search className="w-3 h-3" />
+                    Search: {searchQuery}
+                  </span>
+                )}
+                {selectedCategories.length > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs bg-white border border-blue-200 text-blue-700">
+                    <ListFilter className="w-3 h-3" />
+                    {selectedCategories.length} categories
+                  </span>
+                )}
+              </div>
+            )}
+            {showNearby && userLocation && (
+              <div className="px-3 sm:px-4 py-2 border-t border-gray-100 bg-green-50/60 text-xs text-green-800 flex items-center justify-between gap-2">
+                <span className="truncate">
+                  Nearby: {nearbyConnections.length} nearest location{nearbyConnections.length !== 1 ? 's' : ''}
+                </span>
+                <button
+                  onClick={() => setShowNearby(false)}
+                  className="text-green-700 hover:text-green-900 font-medium"
+                >
+                  Hide
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -337,19 +464,91 @@ const MapViewPage = () => {
           </div>
         )}
 
-        {/* Location Button */}
-        <button
-          onClick={handleCenterOnUser}
-          disabled={gettingLocation}
-          className="absolute bottom-4 right-3 sm:right-4 z-20 bg-white p-3 rounded-lg shadow-lg border border-gray-200 hover:bg-gray-50 disabled:bg-gray-100"
-          title="Center on my location"
-        >
-          {gettingLocation ? (
-            <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
-          ) : (
-            <Crosshair className="w-5 h-5 text-gray-700" />
-          )}
-        </button>
+        {/* Nearby Panel */}
+        {showNearby && (
+          <div className="absolute top-[112px] sm:top-[130px] right-3 sm:right-4 z-30 w-[min(90vw,320px)] bg-white rounded-lg shadow-lg border border-gray-200">
+            <div className="px-3 py-2 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-800">Nearby Me</h3>
+              <button onClick={() => setShowNearby(false)} className="p-1 hover:bg-gray-100 rounded">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="max-h-60 overflow-auto">
+              {!userLocation ? (
+                <div className="px-3 py-4 space-y-2">
+                  <p className="text-xs text-gray-600">Allow location access to find nearby captured locations.</p>
+                  <button
+                    onClick={handleCenterOnUser}
+                    disabled={gettingLocation || loadingNearby}
+                    className="w-full px-3 py-2 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-60"
+                  >
+                    {gettingLocation || loadingNearby ? 'Getting location...' : 'Use my location'}
+                  </button>
+                </div>
+              ) : nearbyConnections.length === 0 ? (
+                <p className="px-3 py-4 text-xs text-gray-500">No nearby captured locations found.</p>
+              ) : (
+                nearbyConnections.map(({ conn, distanceKm }) => (
+                  <button
+                    key={`nearby-${conn.id}`}
+                    onClick={() => {
+                      if (conn.gps && hasValidGPS(conn.gps)) {
+                        setMapCenter([conn.gps.latitude, conn.gps.longitude]);
+                        setHighlightedConnectionId(conn.id);
+                        setPendingPopupConnectionId(conn.id);
+                      }
+                    }}
+                    className={cn(
+                      "w-full text-left px-3 py-2 hover:bg-gray-50 border-b border-gray-100 last:border-b-0",
+                      highlightedConnectionId === conn.id && "bg-green-50 border-l-4 border-l-green-500"
+                    )}
+                  >
+                    <p className="text-sm font-medium text-gray-800 truncate">{conn.accountNumber || conn.fileNumber || 'N/A'}</p>
+                    <p className="text-xs text-gray-500 truncate">{conn.address || '-'}</p>
+                    <p className="text-xs text-green-700 font-medium mt-0.5">{formatDistance(distanceKm)}</p>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Map Quick Actions */}
+        <div className="absolute bottom-24 sm:bottom-4 right-3 sm:right-4 z-20 flex flex-col gap-2">
+          <button
+            onClick={handleCenterOnUser}
+            disabled={gettingLocation}
+            className="bg-white p-3 rounded-lg shadow-lg border border-gray-200 hover:bg-gray-50 disabled:bg-gray-100"
+            title="Center on my location"
+          >
+            {gettingLocation ? (
+              <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+            ) : (
+              <Crosshair className="w-5 h-5 text-gray-700" />
+            )}
+          </button>
+          <button
+            onClick={() => setShowFilters((prev) => !prev)}
+            className={cn(
+              "bg-white p-3 rounded-lg shadow-lg border hover:bg-gray-50",
+              showFilters ? "border-blue-400 text-blue-700" : "border-gray-200 text-gray-700"
+            )}
+            title="Toggle filters"
+          >
+            <Filter className="w-5 h-5" />
+          </button>
+          <button
+            onClick={handleNearbyMe}
+            disabled={loadingNearby}
+            className={cn(
+              "bg-white p-3 rounded-lg shadow-lg border hover:bg-gray-50 disabled:opacity-70",
+              showNearby ? "border-green-400 text-green-700" : "border-gray-200 text-gray-700"
+            )}
+            title="Nearby me"
+          >
+            {loadingNearby ? <Loader2 className="w-5 h-5 animate-spin" /> : <MapPin className="w-5 h-5" />}
+          </button>
+        </div>
 
         {/* Map */}
         <MapContainer
@@ -361,7 +560,11 @@ const MapViewPage = () => {
           <MapController center={mapCenter} points={markerPositions} autoFocusPoints={shouldAutoFocusPoints} />
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            url={
+              mapStyle === 'standard'
+                ? "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                : "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+            }
           />
 
           {/* Connection Markers */}
@@ -378,22 +581,25 @@ const MapViewPage = () => {
               <Marker
                 key={conn.id}
                 position={position}
-                icon={getMarkerIcon(primaryCategory?.color)}
+                icon={getMarkerIcon(primaryCategory?.color, highlightedConnectionId === conn.id)}
+                ref={(ref) => {
+                  markerRefs.current[conn.id] = ref;
+                }}
               >
-                <Popup maxWidth={300}>
-                  <div className="p-2">
-                    <div className="flex items-start justify-between gap-2 mb-2">
+                <Popup maxWidth={260}>
+                  <div className="p-1.5 sm:p-2">
+                    <div className="flex items-start justify-between gap-1.5 sm:gap-2 mb-1.5 sm:mb-2">
                       <div>
-                        <h3 className="font-bold text-base">
+                        <h3 className="font-bold text-sm sm:text-base leading-tight">
                           {conn.accountNumber || conn.fileNumber || 'N/A'}
                         </h3>
-                        <p className="text-sm text-gray-600">{conn.customerName || conn.applicantName}</p>
+                        <p className="text-xs sm:text-sm text-gray-600 leading-tight">{conn.customerName || conn.applicantName}</p>
                       </div>
-                      <MapPin className="w-5 h-5 text-blue-600 flex-shrink-0" />
+                      <MapPin className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" />
                     </div>
 
-                    <div className="space-y-2 text-sm">
-                      <p className="text-gray-700">{conn.address}</p>
+                    <div className="space-y-1.5 sm:space-y-2 text-xs sm:text-sm">
+                      <p className="text-gray-700 leading-snug break-words">{conn.address}</p>
                       
                       {/* Categories */}
                       {connCategories.length > 0 && (
@@ -405,17 +611,17 @@ const MapViewPage = () => {
                       )}
 
                       {/* GPS Info */}
-                      <p className="text-xs text-gray-500 font-mono">
+                      <p className="text-[11px] sm:text-xs text-gray-500 font-mono">
                         {formatCoordinates(conn.gps.latitude, conn.gps.longitude)}
                       </p>
 
                       {/* Actions */}
-                      <div className="flex flex-col sm:flex-row gap-2 pt-2 border-t">
+                      <div className="flex flex-col sm:flex-row gap-1.5 sm:gap-2 pt-1.5 sm:pt-2 border-t">
                         <button
                           onClick={() => navigate(`/application/${conn.id}`)}
-                          className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-xs font-medium"
+                          className="flex-1 flex items-center justify-center gap-1 px-2.5 sm:px-3 py-1.5 sm:py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-[11px] sm:text-xs font-medium"
                         >
-                          <Eye className="w-4 h-4" />
+                          <Eye className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                           View Details
                         </button>
                         <NavigationButton

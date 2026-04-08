@@ -16,7 +16,7 @@ import * as XLSX from 'xlsx';
 import GPSCapture from '../components/GPSCapture';
 import ImageCaptureUpload from '../components/ImageCaptureUpload';
 import CategorySelector, { CategoryBadge } from '../components/CategorySelector';
-import { hasValidGPS, navigateToLocation } from '../lib/gpsUtils';
+import { calculateDistance, formatDistance, hasValidGPS, navigateToLocation } from '../lib/gpsUtils';
 import { getActiveCategories } from '../lib/categoryService';
 import type { Category } from '../lib/types';
 
@@ -35,11 +35,15 @@ const StatCard = ({ label, value, icon: Icon, color }: any) => (
 
 const Dashboard = () => {
   const [apps, setApps] = useState<any[]>([]);
+  const [appsLoading, setAppsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [officeFilter, setOfficeFilter] = useState<Office | 'All'>('All');
   const [categoryFilters, setCategoryFilters] = useState<string[]>([]);
   const [imageFilter, setImageFilter] = useState<'all' | 'with' | 'without'>('all');
+  const [nearbyFilter, setNearbyFilter] = useState<'all' | 'nearby'>('all');
+  const [nearbyLocation, setNearbyLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [gettingNearbyLocation, setGettingNearbyLocation] = useState(false);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [creating, setCreating] = useState(false);
@@ -216,19 +220,48 @@ const Dashboard = () => {
     fetchAddress();
   }, [gpsData, setValue]);
 
+  useEffect(() => {
+    if (nearbyFilter !== 'nearby' || nearbyLocation) return;
+    if (!navigator.geolocation) {
+      toast.error('Geolocation is not supported on this device');
+      setNearbyFilter('all');
+      return;
+    }
+
+    setGettingNearbyLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setNearbyLocation({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        });
+        setGettingNearbyLocation(false);
+      },
+      () => {
+        setGettingNearbyLocation(false);
+        setNearbyFilter('all');
+        toast.error('Please allow location access to use Nearby filter');
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  }, [nearbyFilter, nearbyLocation]);
+
   // Real-time listener (No manual refresh needed) - MUST be before conditional returns
   useEffect(() => {
     if (!user) return; // Early return in effect is okay
+    setAppsLoading(true);
     
     const q = query(collection(db, "applications"), orderBy("lastUpdated", "desc"));
     const unsubscribe = onSnapshot(q, 
       (snapshot) => {
         const appsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setApps(appsData);
+        setAppsLoading(false);
       },
       (error) => {
         console.error("Error fetching applications:", error);
         toast.error("Error loading applications. Please refresh the page.");
+        setAppsLoading(false);
       }
     );
     return () => unsubscribe();
@@ -238,7 +271,7 @@ const Dashboard = () => {
   const filteredApps = useMemo(() => {
     if (!user) return [];
     
-    return apps.filter(app => {
+    const baseFiltered = apps.filter(app => {
       // Office-based access control
       const hasAccess = hasOfficeAccess(user.office, user.role, app.office);
       if (!hasAccess) return false;
@@ -253,6 +286,10 @@ const Dashboard = () => {
       );
       if (imageFilter === 'with' && !hasImage) return false;
       if (imageFilter === 'without' && hasImage) return false;
+
+      if (nearbyFilter === 'nearby') {
+        if (!nearbyLocation || !hasValidGPS(app.gps)) return false;
+      }
 
       // Category filter
       if (categoryFilters.length > 0) {
@@ -317,7 +354,21 @@ const Dashboard = () => {
       
       return matchesSearch && matchesDate;
     });
-  }, [apps, searchQuery, officeFilter, categoryFilters, imageFilter, fromDate, toDate, user, categoryNameById]);
+
+    if (nearbyFilter === 'nearby' && nearbyLocation) {
+      return [...baseFiltered].sort((a, b) => {
+        const aDistance = hasValidGPS(a.gps)
+          ? calculateDistance(nearbyLocation.latitude, nearbyLocation.longitude, a.gps.latitude, a.gps.longitude)
+          : Number.POSITIVE_INFINITY;
+        const bDistance = hasValidGPS(b.gps)
+          ? calculateDistance(nearbyLocation.latitude, nearbyLocation.longitude, b.gps.latitude, b.gps.longitude)
+          : Number.POSITIVE_INFINITY;
+        return aDistance - bDistance;
+      });
+    }
+
+    return baseFiltered;
+  }, [apps, searchQuery, officeFilter, categoryFilters, imageFilter, fromDate, toDate, user, categoryNameById, nearbyFilter, nearbyLocation]);
 
   const stats = useMemo(() => ({
     total: filteredApps.length,
@@ -325,6 +376,7 @@ const Dashboard = () => {
     categorized: filteredApps.filter((a) => (a.categories || []).length > 0).length,
     noGps: filteredApps.filter((a) => !hasValidGPS(a.gps)).length,
   }), [filteredApps]);
+  const hasActiveFilters = categoryFilters.length > 0 || imageFilter !== 'all' || nearbyFilter !== 'all' || fromDate || toDate || (user?.role === ROLES.REGIONAL_ENGINEER && officeFilter !== 'All');
 
   // Show loading state while checking auth
   if (loading) {
@@ -592,7 +644,7 @@ const Dashboard = () => {
       <Toaster position="top-right" />
       
       {/* Header with User Info */}
-      <div className="mb-4 sm:mb-6 bg-gradient-to-r from-blue-600 to-blue-700 text-white p-4 sm:p-6 rounded-xl shadow-lg">
+      <div className="hidden sm:block mb-4 sm:mb-6 bg-gradient-to-r from-blue-600 to-blue-700 text-white p-4 sm:p-6 rounded-xl shadow-lg">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-4 mb-3 sm:mb-4">
           <div className="flex-1 min-w-0 w-full sm:w-auto">
             <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold mb-2">Dashboard</h1>
@@ -694,15 +746,81 @@ const Dashboard = () => {
       </div>
       
       {/* Stats Row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6 mb-4 sm:mb-6 lg:mb-8">
-        <StatCard label="Total Applications" value={stats.total} icon={Users} color="bg-blue-600" />
-        <StatCard label="GPS Captured" value={stats.gpsCaptured} icon={MapPin} color="bg-green-600" />
-        <StatCard label="Categorized" value={stats.categorized} icon={Activity} color="bg-purple-600" />
-        <StatCard label="No GPS" value={stats.noGps} icon={AlertCircle} color="bg-orange-500" />
+      <div className="flex sm:grid sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6 mb-4 sm:mb-6 lg:mb-8 overflow-x-auto sm:overflow-visible pb-1 sm:pb-0 scroll-smooth snap-x snap-mandatory [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+        {appsLoading ? (
+          Array.from({ length: 4 }).map((_, index) => (
+            <div key={`stats-skeleton-${index}`} className="min-w-[160px] sm:min-w-0 snap-start bg-white p-3 sm:p-4 lg:p-6 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3 sm:gap-4 animate-pulse">
+              <div className="w-10 h-10 sm:w-11 sm:h-11 lg:w-12 lg:h-12 rounded-lg bg-gray-200 flex-shrink-0" />
+              <div className="flex-1 min-w-0 space-y-2">
+                <div className="h-3 sm:h-4 bg-gray-200 rounded w-3/4" />
+                <div className="h-6 sm:h-7 bg-gray-200 rounded w-1/2" />
+              </div>
+            </div>
+          ))
+        ) : (
+          <>
+            <div className="min-w-[160px] sm:min-w-0 snap-start">
+              <StatCard label="Total Applications" value={stats.total} icon={Users} color="bg-blue-600" />
+            </div>
+            <div className="min-w-[160px] sm:min-w-0 snap-start">
+              <StatCard label="GPS Captured" value={stats.gpsCaptured} icon={MapPin} color="bg-green-600" />
+            </div>
+            <div className="min-w-[160px] sm:min-w-0 snap-start">
+              <StatCard label="Categorized" value={stats.categorized} icon={Activity} color="bg-purple-600" />
+            </div>
+            <div className="min-w-[160px] sm:min-w-0 snap-start">
+              <StatCard label="No GPS" value={stats.noGps} icon={AlertCircle} color="bg-orange-500" />
+            </div>
+          </>
+        )}
       </div>
 
       <div className="flex flex-col sm:flex-row sm:justify-between items-stretch sm:items-start gap-3 sm:gap-4 mb-4 sm:mb-6">
-        <div className={cn("flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:flex-1 sm:min-w-0 flex-wrap", !showMobileFilters && "hidden sm:flex")}>
+        <div className="sm:hidden flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowMobileFilters((prev) => !prev)}
+            className={cn(
+              "flex-1 px-4 py-2.5 rounded-lg border transition-all duration-200 ease-out active:scale-[0.98]",
+              showMobileFilters
+                ? "border-blue-500 bg-blue-50 text-blue-700"
+                : "border-gray-300 bg-white text-gray-700"
+            )}
+          >
+            <span className="inline-flex items-center justify-center gap-2 text-sm font-semibold">
+              <Filter size={16} />
+              {showMobileFilters ? 'Hide Filters' : 'Filters'}
+            </span>
+          </button>
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={() => {
+                setCategoryFilters([]);
+                setImageFilter('all');
+                setNearbyFilter('all');
+                setFromDate('');
+                setToDate('');
+                if (user.role === ROLES.REGIONAL_ENGINEER) {
+                  setOfficeFilter('All');
+                }
+              }}
+              className="px-3 py-2.5 rounded-lg border border-gray-300 bg-white text-gray-600 text-sm font-medium transition-all duration-200 ease-out active:scale-[0.98]"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        <div
+          className={cn(
+            "w-full sm:flex-1 sm:min-w-0 overflow-hidden sm:overflow-visible transition-all duration-300 ease-out",
+            "sm:max-h-none sm:opacity-100 sm:translate-y-0",
+            showMobileFilters
+              ? "max-h-[720px] opacity-100 translate-y-0"
+              : "max-h-0 opacity-0 -translate-y-1 pointer-events-none sm:pointer-events-auto"
+          )}
+        >
+          <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full flex-wrap">
           {/* Search Input */}
           <div className="relative w-full sm:w-80">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
@@ -748,11 +866,11 @@ const Dashboard = () => {
 
           {/* Category Multi-Select Filter */}
           <div className="relative w-full sm:w-auto" ref={categoryFilterRef}>
-            <button
+             <button
               type="button"
               onClick={() => setShowCategoryFilterMenu(prev => !prev)}
               className={cn(
-                "w-full sm:w-56 pl-10 pr-8 py-2 sm:py-2.5 bg-white border border-gray-300 rounded-lg text-sm text-left",
+                "w-full sm:w-56 pl-10 pr-8 py-2.5 sm:py-2.5 bg-white border border-gray-300 rounded-lg text-sm text-left",
                 "focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all",
                 categoryFilters.length > 0 && "border-blue-400 bg-blue-50/40"
               )}
@@ -762,7 +880,7 @@ const Dashboard = () => {
             </button>
 
             {showCategoryFilterMenu && (
-              <div className="absolute z-50 mt-1 w-full sm:w-72 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg p-2">
+              <div className="absolute z-50 mt-1 w-full sm:w-72 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg p-2 animate-in fade-in zoom-in-95 duration-150">
                 {categories.length === 0 ? (
                   <p className="text-xs text-gray-500 px-2 py-1">No categories available</p>
                 ) : (
@@ -804,8 +922,25 @@ const Dashboard = () => {
             </select>
           </div>
 
+          <div className="relative w-full sm:w-auto">
+            <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+            <select
+              value={nearbyFilter}
+              onChange={(e) => setNearbyFilter(e.target.value as 'all' | 'nearby')}
+              className={cn(
+                "pl-10 pr-8 py-2 sm:py-2.5 w-full sm:w-44 bg-white border border-gray-300 rounded-lg text-sm",
+                "focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all appearance-none cursor-pointer",
+                nearbyFilter === 'nearby' && "border-emerald-400 bg-emerald-50/40"
+              )}
+              disabled={gettingNearbyLocation}
+            >
+              <option value="all">All Locations</option>
+              <option value="nearby">Nearby Me</option>
+            </select>
+          </div>
+
           {categoryFilters.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 sm:max-w-md">
+            <div className="flex flex-wrap items-center gap-1.5 sm:max-w-md sm:order-none order-last">
               {categoryFilters.map((categoryId) => {
                 const category = categories.find((c) => c.id === categoryId);
                 return (
@@ -825,7 +960,7 @@ const Dashboard = () => {
           )}
 
           {/* Date Range Filter */}
-          <div className="flex gap-2 w-full sm:w-auto sm:items-center">
+          <div className="hidden sm:flex gap-2 w-full sm:w-auto sm:items-center">
             <div className="relative flex-1 sm:w-40">
               <input 
                 type="date" 
@@ -882,27 +1017,21 @@ const Dashboard = () => {
                 <X size={18} />
               </button>
             )}
+            {nearbyFilter !== 'all' && (
+              <button
+                onClick={() => setNearbyFilter('all')}
+                className="px-3 py-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                title="Clear nearby filter"
+              >
+                <X size={18} />
+              </button>
+            )}
+          </div>
           </div>
         </div>
 
-        {/* Mobile-First Action Buttons - Optimized Layout */}
-        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto sm:self-start sm:shrink-0">
-          {/* Show Filters Button - Mobile Only, Full Width */}
-          <button
-            type="button"
-            onClick={() => setShowMobileFilters((prev) => !prev)}
-            className={cn(
-              "sm:hidden w-full px-4 py-3 rounded-lg border-2 transition-all duration-200",
-              showMobileFilters 
-                ? "border-blue-500 bg-blue-50 text-blue-700" 
-                : "border-gray-300 bg-white text-gray-700 hover:border-gray-400 hover:bg-gray-50",
-              "active:scale-[0.98] flex items-center justify-center gap-2 text-sm font-semibold shadow-sm"
-            )}
-          >
-            <Filter size={18} className="flex-shrink-0" />
-            <span>{showMobileFilters ? 'Hide Filters' : 'Show Filters'}</span>
-          </button>
-          
+         {/* Mobile-First Action Buttons - Optimized Layout */}
+         <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto sm:self-start sm:shrink-0">
           {/* Primary Actions Row - Side by Side on Mobile */}
           <div className="flex gap-2 w-full sm:w-auto">
             {/* Export Dropdown - Responsive */}
@@ -987,21 +1116,35 @@ const Dashboard = () => {
 
       {/* Modern Table - Desktop View */}
       <div className="hidden md:block bg-white rounded-xl shadow-sm border overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs sm:text-sm text-left">
-            <thead className="bg-gradient-to-r from-gray-50 to-gray-100 text-gray-700 font-semibold uppercase text-xs border-b-2 border-gray-200">
-              <tr>
-                <th className="px-6 py-4">Account Number</th>
-                {user.role === ROLES.REGIONAL_ENGINEER && <th className="px-6 py-4">Office</th>}
-                <th className="px-6 py-4">Image</th>
-                <th className="px-6 py-4">Captured At</th>
-                <th className="px-6 py-4">Categories</th>
-                <th className="px-6 py-4">GPS</th>
-                <th className="px-6 py-4">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {filteredApps.length === 0 ? (
+        {appsLoading ? (
+          <div className="p-4 sm:p-6 space-y-3">
+            {Array.from({ length: 6 }).map((_, index) => (
+              <div key={`desktop-skeleton-${index}`} className="grid grid-cols-6 gap-4 items-center animate-pulse">
+                <div className="h-4 bg-gray-200 rounded col-span-1" />
+                <div className="h-10 bg-gray-200 rounded col-span-1" />
+                <div className="h-4 bg-gray-200 rounded col-span-1" />
+                <div className="h-4 bg-gray-200 rounded col-span-1" />
+                <div className="h-4 bg-gray-200 rounded col-span-1" />
+                <div className="h-8 bg-gray-200 rounded col-span-1" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs sm:text-sm text-left">
+              <thead className="bg-gradient-to-r from-gray-50 to-gray-100 text-gray-700 font-semibold uppercase text-xs border-b-2 border-gray-200">
+                <tr>
+                  <th className="px-6 py-4">Account Number</th>
+                  {user.role === ROLES.REGIONAL_ENGINEER && <th className="px-6 py-4">Office</th>}
+                  <th className="px-6 py-4">Image</th>
+                  <th className="px-6 py-4">Captured At</th>
+                  <th className="px-6 py-4">Categories</th>
+                  <th className="px-6 py-4">GPS</th>
+                  <th className="px-6 py-4">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {filteredApps.length === 0 ? (
                 <tr>
                     <td colSpan={user.role === ROLES.REGIONAL_ENGINEER ? 7 : 6} className="px-6 py-12 text-center text-gray-500">
                     <div className="flex flex-col items-center gap-2">
@@ -1015,6 +1158,15 @@ const Dashboard = () => {
                 filteredApps.map((app) => {
                   const appCategoryIds = Array.isArray(app.categories) ? app.categories : [];
                   const connCategories = categories.filter((cat) => appCategoryIds.includes(cat.id));
+                  const nearbyDistanceKm =
+                    nearbyFilter === 'nearby' && nearbyLocation && hasValidGPS(app.gps)
+                      ? calculateDistance(
+                          nearbyLocation.latitude,
+                          nearbyLocation.longitude,
+                          app.gps.latitude,
+                          app.gps.longitude
+                        )
+                      : null;
                   return (
                   <tr key={app.id} className="hover:bg-blue-50/30 transition-colors duration-150 cursor-pointer" onClick={() => navigate(`/application/${app.id}`)}>
                     <td className="px-6 py-4">
@@ -1051,7 +1203,17 @@ const Dashboard = () => {
                         <span className="text-xs text-gray-400">-</span>
                       )}
                     </td>
-                    <td className="px-6 py-4 text-gray-600 text-xs">{formatDate(app.captureDateTime || app.lastUpdated)}</td>
+                    <td className="px-6 py-4 text-gray-600 text-xs">
+                      <div className="space-y-1">
+                        <div>{formatDate(app.captureDateTime || app.lastUpdated)}</div>
+                        {nearbyDistanceKm !== null && (
+                          <div className="inline-flex items-center gap-1 text-[11px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
+                            <MapPin size={11} />
+                            <span>{formatDistance(nearbyDistanceKm)}</span>
+                          </div>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-6 py-4">
                       {connCategories.length > 0 ? (
                         <div className="flex flex-wrap gap-1">
@@ -1113,13 +1275,14 @@ const Dashboard = () => {
                   </tr>
                 );
                 })
-              )}
-            </tbody>
-          </table>
-        </div>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
         
         {/* Results Counter */}
-        {filteredApps.length > 0 && (
+        {!appsLoading && filteredApps.length > 0 && (
           <div className="px-6 py-3 bg-gray-50 border-t text-sm text-gray-600">
             Showing <span className="font-semibold text-gray-900">{filteredApps.length}</span> of <span className="font-semibold text-gray-900">{apps.length}</span> applications
           </div>
@@ -1128,7 +1291,24 @@ const Dashboard = () => {
 
       {/* Mobile Card View */}
       <div className="md:hidden space-y-3">
-        {filteredApps.length === 0 ? (
+        {appsLoading ? (
+          Array.from({ length: 4 }).map((_, index) => (
+            <div key={`mobile-skeleton-${index}`} className="bg-white rounded-xl shadow-sm border p-4 animate-pulse">
+              <div className="flex justify-between items-start mb-3">
+                <div className="space-y-2 flex-1">
+                  <div className="h-5 w-36 bg-gray-200 rounded" />
+                  <div className="h-3 w-24 bg-gray-200 rounded" />
+                </div>
+                <div className="w-16 h-16 bg-gray-200 rounded-lg" />
+              </div>
+              <div className="space-y-2">
+                <div className="h-3 bg-gray-200 rounded w-2/3" />
+                <div className="h-3 bg-gray-200 rounded w-1/2" />
+                <div className="h-8 bg-gray-200 rounded w-full mt-2" />
+              </div>
+            </div>
+          ))
+        ) : filteredApps.length === 0 ? (
           <div className="bg-white rounded-xl p-8 text-center">
             <Search className="text-gray-300 mx-auto mb-3" size={48} />
             <p className="text-gray-600 font-medium">No captures found</p>
@@ -1139,6 +1319,15 @@ const Dashboard = () => {
              {filteredApps.map((app) => {
                const appCategoryIds = Array.isArray(app.categories) ? app.categories : [];
                const cardCategories = categories.filter((cat) => appCategoryIds.includes(cat.id));
+               const nearbyDistanceKm =
+                 nearbyFilter === 'nearby' && nearbyLocation && hasValidGPS(app.gps)
+                   ? calculateDistance(
+                       nearbyLocation.latitude,
+                       nearbyLocation.longitude,
+                       app.gps.latitude,
+                       app.gps.longitude
+                     )
+                   : null;
                return (
                <div
                  key={app.id}
@@ -1215,6 +1404,12 @@ const Dashboard = () => {
 
                     <div className="text-xs text-gray-500 pt-2 border-t space-y-2">
                       <span className="block">Captured: {formatDate(app.captureDateTime || app.lastUpdated)}</span>
+                      {nearbyDistanceKm !== null && (
+                        <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
+                          <MapPin size={11} />
+                          <span>{formatDistance(nearbyDistanceKm)}</span>
+                        </span>
+                      )}
                     <div className="flex items-center justify-between gap-2">
                       {hasValidGPS(app.gps) ? (
                         <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>

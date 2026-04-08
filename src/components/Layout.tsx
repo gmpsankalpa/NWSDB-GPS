@@ -48,20 +48,26 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
     );
   };
 
+  const isMapPage = location.pathname === '/map' || location.pathname === '/maps';
+
   return (
     <div className="flex flex-col min-h-screen">
-      <Header />
+      <div className={cn(isMapPage && "hidden sm:block")}>
+        <Header />
+      </div>
       
       <div className="flex flex-1 bg-gradient-to-br from-gray-50 to-gray-100 relative">
-        {/* Mobile Menu Button */}
         <button
           onClick={() => setSidebarOpen(!sidebarOpen)}
-          className="lg:hidden fixed bottom-5 right-5 sm:bottom-6 sm:right-6 z-50 p-3 sm:p-4 bg-nwsdbBlue text-white rounded-full shadow-2xl hover:bg-blue-700 transition-all active:scale-95"
+          className={cn(
+            "lg:hidden fixed z-50 p-3 sm:p-4 bg-nwsdbBlue text-white rounded-full shadow-2xl hover:bg-blue-700 transition-all active:scale-95",
+            "bottom-5 right-5 sm:bottom-6 sm:right-6"
+          )}
+          aria-label={sidebarOpen ? "Close navigation menu" : "Open navigation menu"}
         >
           {sidebarOpen ? <X size={20} className="sm:w-6 sm:h-6" /> : <Menu size={20} className="sm:w-6 sm:h-6" />}
         </button>
 
-        {/* Overlay for mobile */}
         {sidebarOpen && (
           <div
             className="lg:hidden fixed inset-0 bg-black/50 z-30"
@@ -69,11 +75,12 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
           />
         )}
 
-        {/* Sidebar */}
         <aside className={cn(
           "w-72 bg-gradient-to-b from-nwsdbBlue to-blue-800 shadow-2xl text-white flex flex-col",
           "fixed lg:static inset-y-0 left-0 z-40 transform transition-transform duration-300 ease-in-out",
-          sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+          sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
+          isMapPage && !sidebarOpen && "hidden lg:flex",
+          isMapPage && sidebarOpen && "flex"
         )}>
           {/* Logo Section */}
           <div className="p-3 sm:p-4 lg:p-6 flex items-center gap-2.5 sm:gap-3 lg:gap-4 border-b border-blue-700/50">
@@ -145,13 +152,15 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
 
         {/* Main Content */}
         <main className="flex-1 overflow-y-auto w-full">
-          <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
+          <div className={cn("max-w-7xl mx-auto p-4 sm:p-6 lg:p-8", isMapPage && "max-w-none p-0 sm:p-0 lg:p-0")}>
             {children}
           </div>
         </main>
       </div>
       
-      <Footer />
+      <div className={cn(isMapPage && "hidden sm:block")}>
+        <Footer />
+      </div>
     </div>
   );
 };
