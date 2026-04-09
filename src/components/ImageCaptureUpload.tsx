@@ -4,6 +4,9 @@ import toast from 'react-hot-toast';
 import { cn } from '../lib/utils';
 import { uploadImageToImgbb } from '../lib/imgbbUpload';
 
+const OFFLINE_IMAGE_MAX_WIDTH = 900;
+const OFFLINE_IMAGE_JPEG_QUALITY = 0.72;
+
 interface UploadedImageMeta {
   imageUrl: string;
   displayUrl: string;
@@ -48,17 +51,41 @@ const ImageCaptureUpload = ({
       reader.readAsDataURL(file);
     });
 
+  const toOfflineDataUrl = async (file: File): Promise<string> => {
+    const sourceUrl = await fileToDataUrl(file);
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Failed to process image for offline storage'));
+      img.src = sourceUrl;
+    });
+
+    const scale = Math.min(1, OFFLINE_IMAGE_MAX_WIDTH / Math.max(image.width, image.height));
+    const targetWidth = Math.max(1, Math.round(image.width * scale));
+    const targetHeight = Math.max(1, Math.round(image.height * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('Failed to prepare offline image');
+    }
+    ctx.drawImage(image, 0, 0, targetWidth, targetHeight);
+    return canvas.toDataURL('image/jpeg', OFFLINE_IMAGE_JPEG_QUALITY);
+  };
+
   const uploadFile = async (file: File) => {
     if (!file) return;
 
     if (!navigator.onLine) {
-      const dataUrl = await fileToDataUrl(file);
+      const dataUrl = await toOfflineDataUrl(file);
       onChange({
         imageUrl: '',
         displayUrl: dataUrl,
         thumbnailUrl: dataUrl,
         offlineDataUrl: dataUrl,
-        offlineFileName: file.name,
+        offlineFileName: `${file.name.replace(/\.[^/.]+$/, '') || 'offline-capture'}.jpg`,
       });
       setRetryFile(null);
       toast.success('Image saved locally. It will upload when online.');

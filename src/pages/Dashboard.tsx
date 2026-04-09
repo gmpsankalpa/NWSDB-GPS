@@ -143,6 +143,7 @@ const Dashboard = () => {
       },
     ];
     writeOfflineQueue(nextQueue);
+    return nextQueue.length;
   }, [readOfflineQueue, writeOfflineQueue]);
 
   const saveCaptureToFirestore = useCallback(async (payload: OfflineCapturePayload) => {
@@ -784,9 +785,14 @@ const Dashboard = () => {
     };
 
     if (!navigator.onLine) {
-      enqueueOfflineCapture(capturePayload);
-      toast.success('No internet. Capture saved offline and queued for sync.');
-      closeModalAndReset();
+      try {
+        const queueLength = enqueueOfflineCapture(capturePayload);
+        toast.success(`No internet. Capture saved offline (${queueLength} pending sync).`);
+        closeModalAndReset();
+      } catch (queueError) {
+        console.error('Offline queue save failed:', queueError);
+        toast.error('Offline save failed. Reduce image size or clear storage and try again.');
+      }
       return;
     }
 
