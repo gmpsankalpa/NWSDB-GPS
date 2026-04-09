@@ -161,3 +161,25 @@ export const uploadImageToImgbb = async (
     deleteUrl: payload.data.delete_url,
   };
 };
+
+export const uploadBase64ImageToImgbb = async (
+  dataUrl: string,
+  fileName: string = 'offline-capture.jpg',
+  options?: UploadOptions
+): Promise<ImgbbUploadResult> => {
+  const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (!match) {
+    throw new Error('Invalid image data for upload');
+  }
+
+  const mimeType = match[1];
+  const base64Data = match[2];
+  const binary = atob(base64Data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+
+  const file = new File([bytes], fileName, { type: mimeType });
+  return uploadImageToImgbb(file, options);
+};

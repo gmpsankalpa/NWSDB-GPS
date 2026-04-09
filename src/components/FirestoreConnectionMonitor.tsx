@@ -52,7 +52,6 @@ export const FirestoreConnectionMonitor = () => {
                 </div>
               ), {
                 duration: 6000,
-                icon: '⚠️',
               });
             }
           }

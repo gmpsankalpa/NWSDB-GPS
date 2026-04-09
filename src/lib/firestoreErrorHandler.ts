@@ -26,7 +26,7 @@ export const handleFirestoreError = (
     if (!indexErrorShown) {
       indexErrorShown = true;
       console.warn(
-        `⚠️ Missing Firestore index detected. ${context} will continue with limited real-time updates.`
+        `Missing Firestore index detected. ${context} will continue with limited real-time updates.`
       );
       
       // Only show user notification in production
@@ -35,7 +35,6 @@ export const handleFirestoreError = (
           'Some real-time features are temporarily limited. Please refresh the page.',
           {
             duration: 5000,
-            icon: '⚠️',
           }
         );
       }
@@ -47,7 +46,6 @@ export const handleFirestoreError = (
   if (error.code === 'permission-denied') {
     toast.error('You don\'t have permission to access this data.', {
       duration: 4000,
-      icon: '🔒',
     });
     return;
   }
@@ -56,7 +54,6 @@ export const handleFirestoreError = (
   if (error.code === 'unavailable') {
     toast.error('Connection lost. Please check your internet.', {
       duration: 5000,
-      icon: '📡',
     });
     return;
   }
@@ -65,7 +62,6 @@ export const handleFirestoreError = (
   if (error.code === 'not-found') {
     toast.error('The requested data could not be found.', {
       duration: 4000,
-      icon: '🔍',
     });
     return;
   }
@@ -74,7 +70,6 @@ export const handleFirestoreError = (
   if (error.code === 'already-exists') {
     toast.error('This record already exists.', {
       duration: 4000,
-      icon: 'ℹ️',
     });
     return;
   }
@@ -83,7 +78,6 @@ export const handleFirestoreError = (
   if (error.code === 'deadline-exceeded') {
     toast.error('Request timed out. Please try again.', {
       duration: 4000,
-      icon: '⏱️',
     });
     return;
   }
@@ -92,7 +86,6 @@ export const handleFirestoreError = (
   if (error.code === 'resource-exhausted') {
     toast.error('Service temporarily unavailable. Please try again later.', {
       duration: 5000,
-      icon: '⚠️',
     });
     return;
   }
@@ -108,13 +101,11 @@ export const handleFirestoreError = (
   if (import.meta.env.DEV) {
     toast.error(`Error: ${error.message}`, {
       duration: 4000,
-      icon: '❌',
     });
   } else {
     // In production, show generic message
     toast.error('An error occurred. Please try again.', {
       duration: 4000,
-      icon: '❌',
     });
   }
 };

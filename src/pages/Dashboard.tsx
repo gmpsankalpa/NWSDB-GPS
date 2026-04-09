@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { collection, onSnapshot, query, orderBy, addDoc, Timestamp, getDocs, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useNavigate } from 'react-router-dom';
@@ -15,6 +15,7 @@ import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
 import GPSCapture from '../components/GPSCapture';
 import ImageCaptureUpload from '../components/ImageCaptureUpload';
+import { uploadBase64ImageToImgbb } from '../lib/imgbbUpload';
 import CategorySelector, { CategoryBadge } from '../components/CategorySelector';
 import { calculateDistance, formatDistance, hasValidGPS, navigateToLocation } from '../lib/gpsUtils';
 import { getActiveCategories } from '../lib/categoryService';
@@ -34,6 +35,7 @@ const StatCard = ({ label, value, icon: Icon, color }: any) => (
 );
 
 const Dashboard = () => {
+  const OFFLINE_CAPTURE_QUEUE_KEY = 'dashboard_offline_capture_queue_v1';
   const [apps, setApps] = useState<any[]>([]);
   const [appsLoading, setAppsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -52,6 +54,9 @@ const Dashboard = () => {
   const [showCategoryFilterMenu, setShowCategoryFilterMenu] = useState(false);
   const [showMobileFilters, setShowMobileFilters] = useState(false);
   const [showProfileDetails, setShowProfileDetails] = useState(false);
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [syncingQueue, setSyncingQueue] = useState(false);
+  const [isOnline, setIsOnline] = useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
   const exportMenuRef = useRef<HTMLDivElement>(null);
   const categoryFilterRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
@@ -73,11 +78,152 @@ const Dashboard = () => {
     displayUrl: string;
     thumbnailUrl?: string;
     deleteUrl?: string;
+    offlineDataUrl?: string;
+    offlineFileName?: string;
   } | undefined>();
   const pinchStartDistanceRef = useRef<number | null>(null);
   const pinchStartZoomRef = useRef(1);
   const dragStartPointRef = useRef<{ x: number; y: number } | null>(null);
   const dragStartOffsetRef = useRef({ x: 0, y: 0 });
+
+  type OfflineCapturePayload = {
+    accountNumber: string;
+    note: string;
+    address: string;
+    office: string;
+    createdBy: string;
+    categories: string[];
+    connectionImage: {
+      imageUrl?: string;
+      displayUrl?: string;
+      thumbnailUrl?: string;
+      deleteUrl?: string;
+      offlineDataUrl?: string;
+      offlineFileName?: string;
+    } | null;
+    gps: {
+      latitude: number;
+      longitude: number;
+      capturedBy: string;
+      capturedAtMs: number;
+      accuracy?: number;
+    };
+  };
+
+  type OfflineQueueItem = {
+    id: string;
+    queuedAtMs: number;
+    payload: OfflineCapturePayload;
+  };
+
+  const readOfflineQueue = useCallback((): OfflineQueueItem[] => {
+    try {
+      const raw = localStorage.getItem(OFFLINE_CAPTURE_QUEUE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }, [OFFLINE_CAPTURE_QUEUE_KEY]);
+
+  const writeOfflineQueue = useCallback((items: OfflineQueueItem[]) => {
+    localStorage.setItem(OFFLINE_CAPTURE_QUEUE_KEY, JSON.stringify(items));
+    setPendingSyncCount(items.length);
+  }, [OFFLINE_CAPTURE_QUEUE_KEY]);
+
+  const enqueueOfflineCapture = useCallback((payload: OfflineCapturePayload) => {
+    const currentQueue = readOfflineQueue();
+    const nextQueue: OfflineQueueItem[] = [
+      ...currentQueue,
+      {
+        id: `offline-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        queuedAtMs: Date.now(),
+        payload,
+      },
+    ];
+    writeOfflineQueue(nextQueue);
+  }, [readOfflineQueue, writeOfflineQueue]);
+
+  const saveCaptureToFirestore = useCallback(async (payload: OfflineCapturePayload) => {
+    const accountNumberQuery = query(
+      collection(db, 'applications'),
+      where('accountNumber', '==', payload.accountNumber)
+    );
+    const existingDocs = await getDocs(accountNumberQuery);
+    if (!existingDocs.empty) {
+      return { status: 'duplicate' as const };
+    }
+
+    const capturedAt = Timestamp.fromMillis(payload.gps.capturedAtMs || Date.now());
+    const now = Timestamp.now();
+    let uploadedConnectionImage = payload.connectionImage;
+    if (uploadedConnectionImage?.offlineDataUrl) {
+      const uploaded = await uploadBase64ImageToImgbb(
+        uploadedConnectionImage.offlineDataUrl,
+        uploadedConnectionImage.offlineFileName || `${payload.accountNumber || 'offline-capture'}.jpg`
+      );
+      uploadedConnectionImage = {
+        imageUrl: uploaded.imageUrl,
+        displayUrl: uploaded.displayUrl,
+        thumbnailUrl: uploaded.thumbnailUrl,
+        deleteUrl: uploaded.deleteUrl,
+      };
+    }
+
+    await addDoc(collection(db, 'applications'), {
+      accountNumber: payload.accountNumber,
+      note: payload.note,
+      address: payload.address,
+      office: payload.office,
+      createdBy: payload.createdBy,
+      submissionDate: now,
+      lastUpdated: now,
+      captureDateTime: capturedAt,
+      gps: {
+        latitude: payload.gps.latitude,
+        longitude: payload.gps.longitude,
+        capturedAt,
+        capturedBy: payload.gps.capturedBy,
+        ...(typeof payload.gps.accuracy === 'number' ? { accuracy: payload.gps.accuracy } : {}),
+      },
+      categories: payload.categories,
+      connectionImage: uploadedConnectionImage || null,
+    });
+
+    return { status: 'created' as const };
+  }, []);
+
+  const syncOfflineQueue = useCallback(async () => {
+    if (!user || syncingQueue || !navigator.onLine) return;
+    const queueItems = readOfflineQueue();
+    if (queueItems.length === 0) return;
+
+    setSyncingQueue(true);
+    const remaining: OfflineQueueItem[] = [];
+    let syncedCount = 0;
+
+    for (const item of queueItems) {
+      try {
+        const result = await saveCaptureToFirestore(item.payload);
+        if (result.status === 'created') {
+          syncedCount += 1;
+        }
+      } catch (error) {
+        remaining.push(item);
+      }
+    }
+
+    writeOfflineQueue(remaining);
+    setSyncingQueue(false);
+
+    if (syncedCount > 0) {
+      toast.success(`Synced ${syncedCount} offline capture${syncedCount > 1 ? 's' : ''}`);
+    }
+    if (remaining.length > 0) {
+      toast.error(`${remaining.length} capture${remaining.length > 1 ? 's are' : ' is'} still pending sync`);
+    }
+  }, [readOfflineQueue, saveCaptureToFirestore, syncingQueue, user, writeOfflineQueue]);
 
   const closeModalAndReset = () => {
     setShowModal(false);
@@ -219,6 +365,33 @@ const Dashboard = () => {
 
     fetchAddress();
   }, [gpsData, setValue]);
+
+  useEffect(() => {
+    setPendingSyncCount(readOfflineQueue().length);
+  }, [readOfflineQueue]);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      void syncOfflineQueue();
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [syncOfflineQueue]);
+
+  useEffect(() => {
+    if (user && isOnline && pendingSyncCount > 0) {
+      void syncOfflineQueue();
+    }
+  }, [isOnline, pendingSyncCount, syncOfflineQueue, user]);
 
   useEffect(() => {
     if (nearbyFilter !== 'nearby' || nearbyLocation) return;
@@ -593,41 +766,38 @@ const Dashboard = () => {
       return;
     }
 
+    const capturePayload: OfflineCapturePayload = {
+      accountNumber: normalizedAccountNumber,
+      note: data.note || '',
+      address: data.address || '',
+      office: user.office,
+      createdBy: user.email,
+      categories: selectedCategories.length > 0 ? selectedCategories : [],
+      connectionImage: connectionImage || null,
+      gps: {
+        latitude: gpsData.latitude,
+        longitude: gpsData.longitude,
+        capturedBy: user.email,
+        capturedAtMs: Date.now(),
+        ...(typeof gpsData.accuracy === 'number' ? { accuracy: gpsData.accuracy } : {}),
+      },
+    };
+
+    if (!navigator.onLine) {
+      enqueueOfflineCapture(capturePayload);
+      toast.success('No internet. Capture saved offline and queued for sync.');
+      closeModalAndReset();
+      return;
+    }
+
     setCreating(true);
     try {
-      const accountNumberQuery = query(
-        collection(db, "applications"),
-        where("accountNumber", "==", normalizedAccountNumber)
-      );
-      const existingDocs = await getDocs(accountNumberQuery);
-      
-      if (!existingDocs.empty) {
+      const result = await saveCaptureToFirestore(capturePayload);
+      if (result.status === 'duplicate') {
         toast.error("This account number already exists! Please use a unique account number.");
         setCreating(false);
         return;
       }
-
-      const gpsField = {
-        latitude: gpsData.latitude,
-        longitude: gpsData.longitude,
-        capturedAt: Timestamp.now(),
-        capturedBy: user.email,
-        ...(typeof gpsData.accuracy === 'number' ? { accuracy: gpsData.accuracy } : {})
-      };
-
-      await addDoc(collection(db, "applications"), {
-        accountNumber: normalizedAccountNumber,
-        note: data.note || '',
-        address: data.address || '',
-        office: user.office, // Assign to current user's office
-        createdBy: user.email,
-        submissionDate: Timestamp.now(),
-        lastUpdated: Timestamp.now(),
-        captureDateTime: Timestamp.now(),
-        gps: gpsField,
-        categories: selectedCategories.length > 0 ? selectedCategories : [],
-        connectionImage: connectionImage || null,
-      });
 
       toast.success("Location captured and connection saved successfully!");
       closeModalAndReset();
@@ -813,8 +983,9 @@ const Dashboard = () => {
         </div>
         <div
           className={cn(
-            "w-full sm:flex-1 sm:min-w-0 overflow-hidden sm:overflow-visible transition-all duration-300 ease-out",
+            "w-full sm:flex-1 sm:min-w-0 sm:overflow-visible transition-all duration-300 ease-out",
             "sm:max-h-none sm:opacity-100 sm:translate-y-0",
+            showCategoryFilterMenu ? "overflow-visible" : "overflow-hidden",
             showMobileFilters
               ? "max-h-[720px] opacity-100 translate-y-0"
               : "max-h-0 opacity-0 -translate-y-1 pointer-events-none sm:pointer-events-auto"
@@ -880,7 +1051,7 @@ const Dashboard = () => {
             </button>
 
             {showCategoryFilterMenu && (
-              <div className="absolute z-50 mt-1 w-full sm:w-72 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg p-2 animate-in fade-in zoom-in-95 duration-150">
+              <div className="relative z-20 sm:absolute sm:z-50 mt-1 w-full sm:w-72 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg p-2 animate-in fade-in zoom-in-95 duration-150">
                 {categories.length === 0 ? (
                   <p className="text-xs text-gray-500 px-2 py-1">No categories available</p>
                 ) : (
@@ -889,13 +1060,14 @@ const Dashboard = () => {
                       <input
                         type="checkbox"
                         checked={categoryFilters.includes(category.id)}
-                        onChange={() =>
+                        onChange={() => {
                           setCategoryFilters((prev) =>
                             prev.includes(category.id)
                               ? prev.filter((id) => id !== category.id)
                               : [...prev, category.id]
-                          )
-                        }
+                          );
+                          setShowCategoryFilterMenu(false);
+                        }}
                         className="rounded text-blue-600"
                       />
                       <span className="text-sm text-gray-700">{category.name}</span>
@@ -1032,6 +1204,29 @@ const Dashboard = () => {
 
          {/* Mobile-First Action Buttons - Optimized Layout */}
          <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto sm:self-start sm:shrink-0">
+          {(pendingSyncCount > 0 || syncingQueue || !isOnline) && (
+            <div className="w-full sm:w-auto flex items-center justify-between gap-2 px-3 py-2 rounded-lg border border-amber-200 bg-amber-50 text-amber-800 text-xs sm:text-sm">
+              <div className="flex items-center gap-1.5">
+                {syncingQueue ? <Loader2 size={14} className="animate-spin" /> : <AlertCircle size={14} />}
+                <span>
+                  {syncingQueue
+                    ? 'Syncing offline captures...'
+                    : pendingSyncCount > 0
+                      ? `${pendingSyncCount} pending sync`
+                      : 'Offline mode active'}
+                </span>
+              </div>
+              {isOnline && pendingSyncCount > 0 && !syncingQueue && (
+                <button
+                  type="button"
+                  onClick={() => void syncOfflineQueue()}
+                  className="px-2 py-1 rounded bg-amber-100 hover:bg-amber-200 font-medium"
+                >
+                  Sync now
+                </button>
+              )}
+            </div>
+          )}
           {/* Primary Actions Row - Side by Side on Mobile */}
           <div className="flex gap-2 w-full sm:w-auto">
             {/* Export Dropdown - Responsive */}
@@ -1096,11 +1291,16 @@ const Dashboard = () => {
             </div>
 
             {/* Capture Button - Primary Action */}
-            <button 
-              onClick={() => setShowModal(true)} 
-              className={cn(
-                "flex-1 sm:flex-none min-w-[130px] bg-gradient-to-r from-nwsdbBlue to-blue-700 text-white",
-                "px-4 sm:px-5 py-3 sm:py-2.5 sm:h-11 sm:py-0 rounded-lg flex items-center justify-center gap-2",
+             <button 
+               onClick={() => {
+                 if (!isOnline) {
+                  toast('Offline mode: GPS capture works. Images are stored locally and uploaded on sync.');
+                 }
+                 setShowModal(true);
+               }} 
+               className={cn(
+                 "flex-1 sm:flex-none min-w-[130px] bg-gradient-to-r from-nwsdbBlue to-blue-700 text-white",
+                 "px-4 sm:px-5 py-3 sm:py-2.5 sm:h-11 sm:py-0 rounded-lg flex items-center justify-center gap-2",
                 "text-sm sm:text-base font-semibold shadow-md",
                 "hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-200",
                 "ring-2 ring-blue-400/20"
@@ -1109,7 +1309,12 @@ const Dashboard = () => {
               <Plus size={18} className="sm:w-[18px] sm:h-[18px] flex-shrink-0" />
               <span className="hidden sm:inline">Capture Location</span>
               <span className="sm:hidden truncate">Capture</span>
-            </button>
+              {pendingSyncCount > 0 && (
+                <span className="ml-1 inline-flex items-center justify-center min-w-5 h-5 px-1 text-[10px] rounded-full bg-white/25 font-bold">
+                  {pendingSyncCount}
+                </span>
+              )}
+             </button>
           </div>
         </div>
       </div>

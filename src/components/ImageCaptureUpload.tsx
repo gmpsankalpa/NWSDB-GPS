@@ -9,6 +9,8 @@ interface UploadedImageMeta {
   displayUrl: string;
   thumbnailUrl?: string;
   deleteUrl?: string;
+  offlineDataUrl?: string;
+  offlineFileName?: string;
 }
 
 interface ImageCaptureUploadProps {
@@ -31,8 +33,37 @@ const ImageCaptureUpload = ({
 
   const previewUrl = useMemo(() => value?.displayUrl || value?.imageUrl || '', [value]);
 
+  const fileToDataUrl = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = typeof reader.result === 'string' ? reader.result : '';
+        if (!result) {
+          reject(new Error('Failed to read image'));
+          return;
+        }
+        resolve(result);
+      };
+      reader.onerror = () => reject(new Error('Failed to read image'));
+      reader.readAsDataURL(file);
+    });
+
   const uploadFile = async (file: File) => {
     if (!file) return;
+
+    if (!navigator.onLine) {
+      const dataUrl = await fileToDataUrl(file);
+      onChange({
+        imageUrl: '',
+        displayUrl: dataUrl,
+        thumbnailUrl: dataUrl,
+        offlineDataUrl: dataUrl,
+        offlineFileName: file.name,
+      });
+      setRetryFile(null);
+      toast.success('Image saved locally. It will upload when online.');
+      return;
+    }
 
     setUploading(true);
     setUploadProgress(0);

@@ -9,7 +9,6 @@ export function OfflineIndicator() {
     const handleOnline = () => {
       setIsOnline(true);
       toast.success('Back online! Connection restored.', {
-        icon: '🌐',
         duration: 3000,
       });
     };
@@ -17,7 +16,6 @@ export function OfflineIndicator() {
     const handleOffline = () => {
       setIsOnline(false);
       toast.error('No internet connection', {
-        icon: '📡',
         duration: 5000,
       });
     };
