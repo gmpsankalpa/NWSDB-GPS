@@ -36,6 +36,7 @@ const StatCard = ({ label, value, icon: Icon, color }: any) => (
 
 const Dashboard = () => {
   const OFFLINE_CAPTURE_QUEUE_KEY = 'dashboard_offline_capture_queue_v1';
+  const DASHBOARD_FILTERS_STORAGE_PREFIX = 'dashboard_filters_v1';
   const [apps, setApps] = useState<any[]>([]);
   const [appsLoading, setAppsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -114,6 +115,15 @@ const Dashboard = () => {
     id: string;
     queuedAtMs: number;
     payload: OfflineCapturePayload;
+  };
+
+  type PersistedDashboardFilters = {
+    officeFilter: Office | 'All';
+    categoryFilters: string[];
+    imageFilter: 'all' | 'with' | 'without';
+    nearbyFilter: 'all' | 'nearby';
+    fromDate: string;
+    toDate: string;
   };
 
   const readOfflineQueue = useCallback((): OfflineQueueItem[] => {
@@ -320,6 +330,26 @@ const Dashboard = () => {
     () => new Map(categories.map((c) => [c.id, normalizeCategoryToken(c.name)])),
     [categories]
   );
+  const dashboardFiltersStorageKey = useMemo(() => {
+    if (!user) return null;
+    return `${DASHBOARD_FILTERS_STORAGE_PREFIX}_${user.id || user.email || 'user'}`;
+  }, [DASHBOARD_FILTERS_STORAGE_PREFIX, user]);
+  const [filtersHydrated, setFiltersHydrated] = useState(false);
+
+  const clearAllFilters = useCallback(() => {
+    setCategoryFilters([]);
+    setImageFilter('all');
+    setNearbyFilter('all');
+    setNearbyLocation(null);
+    setFromDate('');
+    setToDate('');
+    if (user?.role === ROLES.REGIONAL_ENGINEER) {
+      setOfficeFilter('All');
+    }
+    if (dashboardFiltersStorageKey) {
+      localStorage.removeItem(dashboardFiltersStorageKey);
+    }
+  }, [dashboardFiltersStorageKey, user?.role]);
 
   // Close export menu when clicking outside
   useEffect(() => {
@@ -370,6 +400,76 @@ const Dashboard = () => {
   useEffect(() => {
     setPendingSyncCount(readOfflineQueue().length);
   }, [readOfflineQueue]);
+
+  useEffect(() => {
+    if (!user || !dashboardFiltersStorageKey) {
+      setFiltersHydrated(false);
+      return;
+    }
+
+    let parsed: Partial<PersistedDashboardFilters> | null = null;
+    try {
+      const raw = localStorage.getItem(dashboardFiltersStorageKey);
+      parsed = raw ? JSON.parse(raw) : null;
+    } catch {
+      parsed = null;
+    }
+
+    if (parsed) {
+      const safeCategoryFilters = Array.isArray(parsed.categoryFilters)
+        ? parsed.categoryFilters.map((item) => String(item)).filter(Boolean)
+        : [];
+      const safeImageFilter = parsed.imageFilter === 'with' || parsed.imageFilter === 'without' ? parsed.imageFilter : 'all';
+      const safeNearbyFilter = parsed.nearbyFilter === 'nearby' ? 'nearby' : 'all';
+      setCategoryFilters(safeCategoryFilters);
+      setImageFilter(safeImageFilter);
+      setNearbyFilter(safeNearbyFilter);
+      setFromDate(typeof parsed.fromDate === 'string' ? parsed.fromDate : '');
+      setToDate(typeof parsed.toDate === 'string' ? parsed.toDate : '');
+
+      if (user.role === ROLES.REGIONAL_ENGINEER) {
+        const safeOfficeFilter = parsed.officeFilter === 'All' || OFFICE_LIST.some((office) => office.value === parsed.officeFilter)
+          ? parsed.officeFilter
+          : 'All';
+        setOfficeFilter(safeOfficeFilter as Office | 'All');
+      } else {
+        setOfficeFilter('All');
+      }
+    } else {
+      setCategoryFilters([]);
+      setImageFilter('all');
+      setNearbyFilter('all');
+      setFromDate('');
+      setToDate('');
+      setOfficeFilter('All');
+    }
+
+    setFiltersHydrated(true);
+  }, [dashboardFiltersStorageKey, user]);
+
+  useEffect(() => {
+    if (!user || !dashboardFiltersStorageKey || !filtersHydrated) return;
+
+    const payload: PersistedDashboardFilters = {
+      officeFilter: user.role === ROLES.REGIONAL_ENGINEER ? officeFilter : 'All',
+      categoryFilters,
+      imageFilter,
+      nearbyFilter,
+      fromDate,
+      toDate,
+    };
+    localStorage.setItem(dashboardFiltersStorageKey, JSON.stringify(payload));
+  }, [
+    categoryFilters,
+    dashboardFiltersStorageKey,
+    filtersHydrated,
+    fromDate,
+    imageFilter,
+    nearbyFilter,
+    officeFilter,
+    toDate,
+    user,
+  ]);
 
   useEffect(() => {
     const handleOnline = () => {
@@ -971,16 +1071,7 @@ const Dashboard = () => {
           {hasActiveFilters && (
             <button
               type="button"
-              onClick={() => {
-                setCategoryFilters([]);
-                setImageFilter('all');
-                setNearbyFilter('all');
-                setFromDate('');
-                setToDate('');
-                if (user.role === ROLES.REGIONAL_ENGINEER) {
-                  setOfficeFilter('All');
-                }
-              }}
+              onClick={clearAllFilters}
               className="px-3 py-2.5 rounded-lg border border-gray-300 bg-white text-gray-600 text-sm font-medium transition-all duration-200 ease-out active:scale-[0.98]"
             >
               Clear
